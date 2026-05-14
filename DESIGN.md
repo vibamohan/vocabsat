@@ -1,4 +1,4 @@
-# MVP Design Doc: Today Edge Session
+# MVP Design Doc: Today Session
 
 ## Product Goal
 
@@ -40,7 +40,7 @@ example: The committee gave the proposal only a perfunctory review.
 
 The user opens the app and sees one main action:
 
-> **Start Today’s Edge Session**
+> **Start Today’s Session**
 
 The app selects today’s words and guides the user through a loop:
 
@@ -58,7 +58,7 @@ The user should never choose a drill type.
 
 Show one card.
 
-## Today’s Edge Session
+## Today’s Session
 
 Example copy:
 

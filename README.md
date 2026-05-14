@@ -1,84 +1,92 @@
-# Next.js + Supabase + shadcn/ui Boilerplate
+# VocabSAT
 
-A minimal, production-ready starter template for building internal tools and web apps.
+A focused Next.js + Supabase MVP for daily SAT vocabulary recall.
 
-## Features
+The app does one thing: an authenticated user starts today's session, learns a
+small set of hard SAT-plausible words, answers mixed recall questions, reviews
+misses immediately, and finishes when every word is recall-ready or the question
+cap is reached.
 
-- ✅ **Next.js 16** - App Router, React Server Components
-- ✅ **Supabase** - Auth, database, storage
-- ✅ **shadcn/ui** - Beautiful, accessible UI components
-- ✅ **Tailwind CSS** - Utility-first styling
-- ✅ **TypeScript** - Type safety
-- ✅ **Collapsible Sidebar** - Ready-to-use dashboard layout
-- ✅ **Auth flows** - Login, logout working
+## Stack
 
-## Prerequisites
+- Next.js App Router + TypeScript
+- Supabase Auth + Postgres with RLS
+- shadcn/ui components
+- Tailwind CSS
 
-- Node.js 20+ (`node -v` to check)
-- A Supabase account ([supabase.com](https://supabase.com))
+## Environment
 
-## Quick Start
+Create `.env.local` with the public Supabase values from Project Settings > API:
 
-1. **Clone the repo**
 ```bash
-   git clone https://github.com/Barty-Bart/nextjs-supabase-shadcn-boilerplate.git
-   cd nextjs-supabase-shadcn-boilerplate
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-publishable-or-anon-key
 ```
 
-2. **Install dependencies**
+Optional client-side tuning:
+
 ```bash
-   npm install
+NEXT_PUBLIC_DAILY_WORD_COUNT=6
+NEXT_PUBLIC_STUDY_TIME_ZONE=America/Los_Angeles
 ```
 
-3. **Set up environment variables**
+`NEXT_PUBLIC_DAILY_WORD_COUNT` is bounded to 5-7 for the MVP.
+
+## Supabase Setup
+
+This repo includes the initial database infrastructure:
+
+- `supabase/migrations/202605140001_today_session_mvp.sql`
+- `supabase/migrations/202605140002_allow_session_attempt_reset.sql`
+- `supabase/seed.sql`
+- `scripts/build-vocab-seed.mjs`
+- `sat_300_plus_vocab_dataset.csv`
+
+For a fresh hosted Supabase project, the most direct setup path is:
+
+1. Open the Supabase SQL Editor.
+2. Run every migration SQL file in `supabase/migrations/` in filename order.
+3. Run the seed SQL in `supabase/seed.sql`.
+4. In Auth settings, make sure your local URL is allowed while developing.
+
+If the CSV changes, regenerate the seed SQL:
+
 ```bash
-   cp .env.example .env.local
-```
-   
-   Then edit `.env.local` with your Supabase credentials:
-```
-   NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-anon-key
-```
-   
-   Get these from: Supabase Dashboard → Project Settings → API
-
-4. **Run the dev server**
-```bash
-   npm run dev
+npm run seed:build
 ```
 
-5. **Open http://localhost:3000**
+## Data Model
 
-## Project Structure
-```
-app/
-  page.tsx              → Redirects to login or dashboard
-  auth/                 → Login, signup, password reset
-  dashboard/            → Protected dashboard page
-    layout.tsx          → Sidebar layout
-    page.tsx            → Dashboard content
-components/
-  app-sidebar.tsx       → Sidebar with navigation
-  ui/                   → shadcn components
-lib/
-  supabase/             → Supabase client setup
-  utils.ts              → Utility functions
-```
+- `vocab_words`: seeded SAT word bank.
+- `study_sessions`: one user-owned session per study date.
+- `study_session_words`: per-session word status and satisfied question types.
+- `study_question_attempts`: immutable answer history.
+- `user_word_mastery`: cross-session weak/learning/ready state for future selection.
 
-## Adding shadcn Components
-```bash
-npx shadcn@latest add [component-name]
-```
+RLS is enabled on study tables. Authenticated users can read seeded vocabulary
+and can only read/write their own study rows.
 
-Browse components: https://ui.shadcn.com/docs/components
+## App Flow
 
-## Customization
+- `/` redirects authenticated users to `/dashboard`, otherwise to `/auth/login`.
+- `/dashboard` shows the single Today Session card.
+- `/session` runs Learn, Practice, Correction, Guess Check, and Completion
+  screens.
 
-- **Sidebar menu items**: Edit `components/app-sidebar.tsx`
-- **Theme/colors**: Edit `app/globals.css`
-- **Auth redirects**: Edit `components/login-form.tsx`
+Auth and study mutations run through the browser Supabase client. RLS and table
+constraints are the guardrails; the MVP does not try to prevent users from
+modifying their own study progress.
 
-## License
+## Manual Acceptance Checks
 
-MIT
+- Fresh user signs up or logs in and sees the Today Session card.
+- Start creates one daily session with 5-7 seeded words.
+- Learn cards advance into mixed practice.
+- Wrong answers show a compact correction and return later.
+- Correct SAT-style usage asks "Knew it" vs "Guessed".
+- "Guessed" keeps the word shaky.
+- A word becomes recall-ready only after known correct answers for all three
+  question types.
+- Session completes when all words are recall-ready or the 45-question cap is
+  reached.
+- Refreshing `/dashboard` or `/session` continues the current day's session.

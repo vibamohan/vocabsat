@@ -1,22 +1,30 @@
-import { redirect } from "next/navigation"
-import { createClient } from "@/lib/supabase/server"
-import { Suspense } from "react"
+"use client";
 
-async function HomeContent() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo } from "react";
 
-  if (user) {
-    redirect("/dashboard")
-  } else {
-    redirect("/auth/login")
-  }
-}
+import { createClient } from "@/lib/supabase/client";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export default function Home() {
+  const router = useRouter();
+  const supabase = useMemo(() => createClient(), []);
+
+  useEffect(() => {
+    async function routeUser() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      router.replace(user ? "/dashboard" : "/auth/login");
+    }
+
+    void routeUser();
+  }, [router, supabase]);
+
   return (
-    <Suspense fallback={<div>Loading...</div>}>
-      <HomeContent />
-    </Suspense>
-  )
+    <main className="flex min-h-svh items-center justify-center p-6">
+      <Skeleton className="h-10 w-52" />
+    </main>
+  );
 }
