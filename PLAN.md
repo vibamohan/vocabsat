@@ -29,7 +29,7 @@ Explicit choices:
    - Implement today-session selection:
      - Continue unfinished current-day session first.
      - Otherwise choose weak prior words first.
-     - Fill remaining slots with next unseen words ordered by dataset id.
+     - Fill remaining slots with next unseen words from a per-user deterministic word order.
    - Store one session per user per day with a configurable app timezone helper, defaulting to America/Los_Angeles.
 4. Session engine
    - Add server actions that always authenticate internally:
@@ -66,7 +66,7 @@ Supabase client.
 Manual checks only, per repo guidance:
 
 - Fresh user signs up/logs in and sees “Start Today’s Edge Session.”
-- Starting creates one daily session with 5–7 seeded words.
+- Starting creates one daily session with 5–7 seeded words from the user's deterministic word order.
 - Learn cards advance into mixed practice.
 - Wrong answers show compact correction and return later.
 - Correct SAT usage triggers guess check; “Guessed” keeps the word shaky.

@@ -80,7 +80,7 @@ modifying their own study progress.
 ## Manual Acceptance Checks
 
 - Fresh user signs up or logs in and sees the Today Session card.
-- Start creates one daily session with 5-7 seeded words.
+- Start creates one daily session with 5-7 seeded words from the user's deterministic word order.
 - Learn cards advance into mixed practice.
 - Wrong answers show a compact correction and return later.
 - Correct SAT-style usage asks "Knew it" vs "Guessed".

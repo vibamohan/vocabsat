@@ -684,6 +684,15 @@ async function selectWordsForToday(
   const masteryRows = (masteryData ?? []) as MasteryRow[];
   const words = (wordData ?? []) as VocabWord[];
   const wordsById = new Map(words.map((word) => [word.id, word]));
+  const wordOrderRankById = new Map<number, number>(
+    words.map((word): [number, number] => [
+      word.id,
+      getUserWordOrderRank(userId, word),
+    ]),
+  );
+  const wordsByUserOrder = [...words].sort((first, second) =>
+    compareWordsByUserOrder(first, second, wordOrderRankById),
+  );
   const seenWordIds = new Set(masteryRows.map((row) => row.vocab_word_id));
   const selected = new Map<number, VocabWord>();
 
@@ -697,7 +706,19 @@ async function selectWordsForToday(
         return secondScore - firstScore;
       }
 
-      return (first.last_seen_at ?? "").localeCompare(second.last_seen_at ?? "");
+      const lastSeenComparison = (first.last_seen_at ?? "").localeCompare(
+        second.last_seen_at ?? "",
+      );
+
+      if (lastSeenComparison !== 0) {
+        return lastSeenComparison;
+      }
+
+      return compareMasteryRowsByUserOrder(
+        first,
+        second,
+        wordOrderRankById,
+      );
     })
     .forEach((row) => {
       const word = wordsById.get(row.vocab_word_id);
@@ -707,7 +728,7 @@ async function selectWordsForToday(
       }
     });
 
-  for (const word of words) {
+  for (const word of wordsByUserOrder) {
     if (selected.size >= limit) {
       break;
     }
@@ -717,7 +738,7 @@ async function selectWordsForToday(
     }
   }
 
-  for (const word of words) {
+  for (const word of wordsByUserOrder) {
     if (selected.size >= limit) {
       break;
     }
@@ -733,6 +754,64 @@ function getMasteryPriority(row: MasteryRow) {
   return (
     statusScore + row.miss_count * 8 + row.guessed_count * 6 - row.correct_count
   );
+}
+
+function getUserWordOrderRank(userId: string, word: VocabWord) {
+  return hashString(`${userId}:${word.id}`);
+}
+
+function compareWordsByUserOrder(
+  first: VocabWord,
+  second: VocabWord,
+  wordOrderRankById: Map<number, number>,
+) {
+  const rankComparison =
+    getWordOrderRank(wordOrderRankById, first.id) -
+    getWordOrderRank(wordOrderRankById, second.id);
+
+  if (rankComparison !== 0) {
+    return rankComparison;
+  }
+
+  if (first.sort_order !== second.sort_order) {
+    return first.sort_order - second.sort_order;
+  }
+
+  return first.id - second.id;
+}
+
+function compareMasteryRowsByUserOrder(
+  first: MasteryRow,
+  second: MasteryRow,
+  wordOrderRankById: Map<number, number>,
+) {
+  const rankComparison =
+    getWordOrderRank(wordOrderRankById, first.vocab_word_id) -
+    getWordOrderRank(wordOrderRankById, second.vocab_word_id);
+
+  if (rankComparison !== 0) {
+    return rankComparison;
+  }
+
+  return first.vocab_word_id - second.vocab_word_id;
+}
+
+function getWordOrderRank(
+  wordOrderRankById: Map<number, number>,
+  vocabWordId: number,
+) {
+  return wordOrderRankById.get(vocabWordId) ?? Number.MAX_SAFE_INTEGER;
+}
+
+function hashString(value: string) {
+  let hash = 2166136261;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+
+  return hash;
 }
 
 async function markWordsSeen(
