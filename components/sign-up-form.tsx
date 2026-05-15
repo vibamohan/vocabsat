@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -61,9 +60,6 @@ export function SignUpForm({
       <Card>
         <CardHeader>
           <CardTitle className="text-2xl">Sign up</CardTitle>
-          <CardDescription>
-            Create an account for daily word recall.
-          </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSignUp}>

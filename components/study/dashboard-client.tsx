@@ -108,21 +108,8 @@ export function DashboardClient() {
   };
 
   return (
-    <StudyAppShell userEmail={user?.email}>
-      <section className="flex flex-col gap-6">
-        <div className="flex max-w-2xl flex-col gap-2">
-          <p className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
-            Today
-          </p>
-          <h1 className="text-3xl font-semibold tracking-tight">
-            One set, fully recalled.
-          </h1>
-          <p className="max-w-xl text-muted-foreground">
-            Work through a compact loop of hard SAT-plausible words. No modes,
-            no dashboard chores.
-          </p>
-        </div>
-
+    <StudyAppShell>
+      <section className="flex w-full max-w-xl flex-col gap-4">
         {error ? (
           <p className="max-w-xl text-sm text-destructive">{error}</p>
         ) : null}

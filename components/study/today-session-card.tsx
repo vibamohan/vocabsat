@@ -12,7 +12,6 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
@@ -27,6 +26,11 @@ type TodaySessionCardProps = {
   summary: TodaySessionSummary;
 };
 
+type ActiveSessionPhase = Extract<
+  TodaySessionSummary,
+  { hasSession: true }
+>["phase"];
+
 export function TodaySessionCard({
   isBusy = false,
   isResetting = false,
@@ -39,19 +43,14 @@ export function TodaySessionCard({
     summary.availableWordCount < summary.dailyWordCount
   ) {
     return (
-      <Card className="max-w-xl">
+      <Card className="w-full max-w-xl">
         <CardHeader>
-          <CardTitle>Seed the word bank</CardTitle>
-          <CardDescription>
-            Supabase is ready for the MVP tables, but the vocabulary seed has
-            not been loaded yet.
-          </CardDescription>
+          <CardTitle>Word bank</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground">
-            Run the migration and seed SQL from the README. The MVP needs at
-            least {summary.dailyWordCount} words before a session can start.
-          </p>
+          <Badge variant="outline">
+            {summary.availableWordCount} / {summary.dailyWordCount} words
+          </Badge>
         </CardContent>
         <CardFooter>
           <Button disabled type="button">
@@ -64,22 +63,13 @@ export function TodaySessionCard({
 
   if (!summary.hasSession) {
     return (
-      <Card className="max-w-xl">
+      <Card className="w-full max-w-xl">
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
-            <CardTitle>{"Today's words are ready."}</CardTitle>
+            <CardTitle>Today</CardTitle>
             <Badge variant="secondary">{summary.dailyWordCount} new words</Badge>
           </div>
-          <CardDescription>
-            Practice until each word is recall-ready.
-          </CardDescription>
         </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            One short loop: learn, answer mixed recall questions, and review
-            misses as they come up.
-          </p>
-        </CardContent>
         <CardFooter>
           <Button disabled={isBusy} onClick={onStart} type="button">
             <BookOpenCheck data-icon="inline-start" />
@@ -94,23 +84,14 @@ export function TodaySessionCard({
   const isComplete = summary.completed;
 
   return (
-    <Card className="max-w-xl">
+    <Card className="w-full max-w-xl">
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
-          <CardTitle>
-            {isComplete
-              ? "Today's words are recall-ready."
-              : "Continue today's session"}
-          </CardTitle>
+          <CardTitle>{isComplete ? "Recall-ready" : "Today"}</CardTitle>
           <Badge variant={isComplete ? "default" : "secondary"}>
             {summary.readyCount} of {summary.wordCount} ready
           </Badge>
         </div>
-        <CardDescription>
-          {isComplete
-            ? "You can view today's results."
-            : "Your unfinished words stay at the front of the loop."}
-        </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="h-2 overflow-hidden rounded-full bg-muted">
@@ -123,9 +104,7 @@ export function TodaySessionCard({
           <Badge variant="outline">
             {summary.questionsAnswered} / {summary.questionCap} questions
           </Badge>
-          <Badge variant="outline">
-            {summary.phase === "learn" ? "Learn phase" : summary.phase}
-          </Badge>
+          <Badge variant="outline">{formatPhase(summary.phase)}</Badge>
         </div>
       </CardContent>
       <CardFooter className="flex flex-wrap gap-3">
@@ -151,4 +130,8 @@ export function TodaySessionCard({
       </CardFooter>
     </Card>
   );
+}
+
+function formatPhase(phase: ActiveSessionPhase) {
+  return phase.charAt(0).toUpperCase() + phase.slice(1);
 }

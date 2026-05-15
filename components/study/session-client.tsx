@@ -276,7 +276,6 @@ export function SessionClient() {
           </Button>
         ) : null
       }
-      userEmail={user?.email}
     >
       {error ? <p className="max-w-2xl text-sm text-destructive">{error}</p> : null}
 

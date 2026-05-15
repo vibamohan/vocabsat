@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
@@ -38,25 +37,21 @@ export function LearnScreen({
   view: LearnView;
 }) {
   return (
-    <Card className="max-w-2xl">
+    <Card className="w-full max-w-2xl">
       <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Badge variant="secondary">
             Learn {view.currentIndex + 1} of {view.totalWords}
           </Badge>
-          <Badge variant="outline">Fast handle</Badge>
         </div>
         <CardTitle className="text-4xl leading-tight">
           {capitalize(view.currentWord.vocab_word.word)}
         </CardTitle>
-        <CardDescription>
-          Read once, then keep moving. Practice will bring it back.
-        </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
         <div className="flex flex-col gap-2">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Fast meaning
+            Definition
           </p>
           <p className="text-lg leading-relaxed">
             {view.currentWord.vocab_word.fast_meaning}
@@ -94,14 +89,15 @@ export function QuestionScreen({
   const progress = Math.round((view.readyCount / view.totalWords) * 100);
 
   return (
-    <Card className="max-w-3xl">
+    <Card className="w-full max-w-3xl">
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Badge variant="secondary">
             {view.readyCount} of {view.totalWords} recall-ready
           </Badge>
           <Badge variant="outline">
-            {view.session.total_questions_answered} / {view.session.question_cap} questions
+            {view.session.total_questions_answered} /{" "}
+            {view.session.question_cap} questions
           </Badge>
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-muted">
@@ -110,9 +106,9 @@ export function QuestionScreen({
             style={{ width: `${progress}%` }}
           />
         </div>
-        <CardDescription>
+        <p className="text-sm font-medium text-muted-foreground">
           {getQuestionTypeLabel(view.question.questionType)}
-        </CardDescription>
+        </p>
         <CardTitle className="text-2xl leading-snug">
           {view.question.prompt}
         </CardTitle>
@@ -150,21 +146,17 @@ export function CorrectionScreen({
   word: SessionWordWithWord;
 }) {
   return (
-    <Card className="max-w-2xl">
+    <Card className="w-full max-w-2xl">
       <CardHeader>
         <Badge variant="destructive" className="w-fit">
-          Review
+          Incorrect
         </Badge>
-        <CardTitle>Not quite.</CardTitle>
-        <CardDescription>
-          This word will return later in the loop.
-        </CardDescription>
+        <CardTitle className="text-4xl leading-tight">
+          {capitalize(word.vocab_word.word)}
+        </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="flex flex-col gap-2">
-          <p className="text-3xl font-semibold">
-            {capitalize(word.vocab_word.word)}
-          </p>
           <p className="text-lg leading-relaxed">
             {word.vocab_word.fast_meaning}
           </p>
@@ -194,16 +186,14 @@ export function GuessCheckScreen({
   pendingGuess: PendingGuess;
 }) {
   return (
-    <Card className="max-w-2xl">
+    <Card className="w-full max-w-2xl">
       <CardHeader>
         <Badge variant="secondary" className="w-fit">
           Check
         </Badge>
-        <CardTitle>Did you know it or guess?</CardTitle>
-        <CardDescription>
-          {capitalize(pendingGuess.word.word)} only gets SAT usage credit if you
-          knew it.
-        </CardDescription>
+        <CardTitle className="text-4xl leading-tight">
+          {capitalize(pendingGuess.word.word)}
+        </CardTitle>
       </CardHeader>
       <CardContent>
         <p className="text-lg leading-relaxed">
@@ -245,19 +235,14 @@ export function CompletionScreen({
   const capped = view.session.completion_reason === "question_cap";
 
   return (
-    <Card className="max-w-3xl">
+    <Card className="w-full max-w-3xl">
       <CardHeader>
         <Badge variant={capped ? "secondary" : "default"} className="w-fit">
           Complete
         </Badge>
         <CardTitle>
-          {capped ? "Session complete." : "Today's words are recall-ready."}
+          {capped ? "Question cap reached." : "Recall-ready."}
         </CardTitle>
-        <CardDescription>
-          {capped
-            ? "The remaining words will lead your next session."
-            : "Every word cleared all three recall checks."}
-        </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

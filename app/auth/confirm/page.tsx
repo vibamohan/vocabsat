@@ -7,7 +7,6 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -19,6 +18,7 @@ function ConfirmContent() {
   const searchParams = useSearchParams();
   const supabase = useMemo(() => createClient(), []);
   const [message, setMessage] = useState("Confirming your account...");
+  const isConfirming = message === "Confirming your account...";
 
   useEffect(() => {
     async function confirmAuth() {
@@ -70,12 +70,13 @@ function ConfirmContent() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-2xl">Confirming</CardTitle>
-        <CardDescription>{message}</CardDescription>
+        <CardTitle className="text-2xl">{message}</CardTitle>
       </CardHeader>
-      <CardContent>
-        <Skeleton className="h-2 w-full" />
-      </CardContent>
+      {isConfirming ? (
+        <CardContent>
+          <Skeleton className="h-2 w-full" />
+        </CardContent>
+      ) : null}
     </Card>
   );
 }
