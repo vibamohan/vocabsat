@@ -52,6 +52,7 @@ type AttemptRow = {
 };
 
 type SubmitAnswerInput = {
+  attemptId: string;
   sessionWordId: string;
   questionType: QuestionType;
   selectedVocabWordId: number;
@@ -269,6 +270,7 @@ export async function submitAnswer(
   const { data: insertedAttempt, error: attemptError } = await supabase
     .from("study_question_attempts")
     .insert({
+      id: input.attemptId,
       confidence: isCorrect && !shouldAskGuess ? "known" : null,
       is_correct: isCorrect,
       question_type: input.questionType,

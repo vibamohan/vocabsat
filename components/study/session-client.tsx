@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { RotateCcw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { StudyAppShell } from "@/components/study/app-shell";
 import {
@@ -17,12 +17,15 @@ import { Button } from "@/components/ui/button";
 import {
   advanceLearn,
   getCurrentUser,
-  getPendingGuess,
   getSessionView,
   recordGuess,
   resetTodaySession,
   submitAnswer,
 } from "@/lib/study/client-session";
+import {
+  applyOptimisticAnswer,
+  applyOptimisticGuess,
+} from "@/lib/study/optimistic-session";
 import type {
   AnswerConfidence,
   PendingGuess,
@@ -48,6 +51,55 @@ export function SessionClient() {
     null,
   );
   const [view, setView] = useState<SessionView | null>(null);
+  const handledGuessAttemptIdsRef = useRef<Set<string>>(new Set());
+  const handledQuestionKeyRef = useRef<string | null>(null);
+  const persistenceQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const persistenceVersionRef = useRef(0);
+
+  const refreshView = useCallback(async () => {
+    if (!user) {
+      return;
+    }
+
+    setView(await getSessionView(supabase, user.id));
+  }, [supabase, user]);
+
+  const enqueuePersistence = useCallback(
+    (operation: () => Promise<void>, fallbackMessage: string) => {
+      const version = persistenceVersionRef.current;
+      const queuedOperation = persistenceQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          if (version !== persistenceVersionRef.current) {
+            return;
+          }
+
+          await operation();
+        })
+        .catch(async (caughtError) => {
+          if (version !== persistenceVersionRef.current) {
+            return;
+          }
+
+          persistenceVersionRef.current += 1;
+          handledGuessAttemptIdsRef.current.clear();
+          handledQuestionKeyRef.current = null;
+          setMode({ type: "normal" });
+          setError(getErrorMessage(caughtError, fallbackMessage));
+
+          try {
+            await refreshView();
+          } catch (refreshError) {
+            setError(
+              getErrorMessage(refreshError, "Unable to reload the session."),
+            );
+          }
+        });
+
+      persistenceQueueRef.current = queuedOperation;
+    },
+    [refreshView],
+  );
 
   const loadView = useCallback(async () => {
     setError(null);
@@ -62,6 +114,7 @@ export function SessionClient() {
       }
 
       setUser(currentUser);
+      setMode({ type: "normal" });
       setView(await getSessionView(supabase, currentUser.id));
     } catch (caughtError) {
       setError(
@@ -77,14 +130,6 @@ export function SessionClient() {
   useEffect(() => {
     void loadView();
   }, [loadView]);
-
-  const refreshView = async () => {
-    if (!user) {
-      return;
-    }
-
-    setView(await getSessionView(supabase, user.id));
-  };
 
   const handleLearnContinue = async () => {
     if (!user || !view || view.screen !== "learn") {
@@ -127,7 +172,7 @@ export function SessionClient() {
     }
   };
 
-  const handleAnswer = async (
+  const handleAnswer = (
     question: StudyQuestion,
     selectedVocabWordId: number,
   ) => {
@@ -136,96 +181,104 @@ export function SessionClient() {
     }
 
     setError(null);
-    setIsPending(true);
 
-    try {
-      const result = await submitAnswer(supabase, user.id, {
-        questionType: question.questionType,
-        selectedVocabWordId,
-        sessionWordId: question.targetSessionWordId,
-      });
+    const questionKey = [
+      view.session.id,
+      view.session.total_questions_answered,
+      question.targetSessionWordId,
+      question.questionType,
+    ].join(":");
 
-      if (result.outcome === "incorrect") {
-        const word = view.words.find(
-          (sessionWord) => sessionWord.id === result.sessionWordId,
-        );
-
-        if (!word) {
-          await refreshView();
-          return;
-        }
-
-        setMode({ type: "correction", word });
-        return;
-      }
-
-      if (result.outcome === "guess_check") {
-        const pendingGuess = await getPendingGuess(
-          supabase,
-          user.id,
-          result.attemptId,
-        );
-
-        if (pendingGuess) {
-          setMode({ type: "guess", pendingGuess });
-          return;
-        }
-      }
-
-      await refreshView();
-    } catch (caughtError) {
-      setError(
-        caughtError instanceof Error
-          ? caughtError.message
-          : "Unable to save the answer.",
-      );
-      await refreshView();
-    } finally {
-      setIsPending(false);
-    }
-  };
-
-  const handleCorrectionContinue = async () => {
-    setMode({ type: "normal" });
-    setIsPending(true);
-
-    try {
-      await refreshView();
-    } catch (caughtError) {
-      setError(
-        caughtError instanceof Error
-          ? caughtError.message
-          : "Unable to continue the session.",
-      );
-    } finally {
-      setIsPending(false);
-    }
-  };
-
-  const handleGuess = async (
-    attemptId: string,
-    confidence: AnswerConfidence,
-  ) => {
-    if (!user) {
+    if (handledQuestionKeyRef.current === questionKey) {
       return;
     }
 
-    setError(null);
-    setIsPending(true);
+    handledQuestionKeyRef.current = questionKey;
+
+    const attemptId = crypto.randomUUID();
+    const answeredAt = new Date().toISOString();
 
     try {
-      await recordGuess(supabase, user.id, attemptId, confidence);
-      setMode({ type: "normal" });
-      await refreshView();
+      const result = applyOptimisticAnswer(
+        view,
+        question,
+        selectedVocabWordId,
+        attemptId,
+        answeredAt,
+      );
+
+      setView(result.nextView);
+
+      if (result.correctionWord) {
+        setMode({ type: "correction", word: result.correctionWord });
+      } else if (result.pendingGuess) {
+        setMode({ type: "guess", pendingGuess: result.pendingGuess });
+      } else {
+        setMode({ type: "normal" });
+      }
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
           ? caughtError.message
-          : "Unable to save the guess check.",
+          : "Unable to check the answer.",
       );
-    } finally {
-      setIsPending(false);
+      handledQuestionKeyRef.current = null;
+      return;
     }
+
+    enqueuePersistence(
+      async () => {
+        await submitAnswer(supabase, user.id, {
+          attemptId,
+          questionType: question.questionType,
+          selectedVocabWordId,
+          sessionWordId: question.targetSessionWordId,
+        });
+      },
+      "Unable to save the answer.",
+    );
+  };
+
+  const handleCorrectionContinue = () => {
+    setMode({ type: "normal" });
+  };
+
+  const handleGuess = (attemptId: string, confidence: AnswerConfidence) => {
+    if (!user || !view || mode.type !== "guess") {
+      return;
+    }
+
+    if (handledGuessAttemptIdsRef.current.has(attemptId)) {
+      return;
+    }
+
+    handledGuessAttemptIdsRef.current.add(attemptId);
+    setError(null);
+
+    try {
+      setView(
+        applyOptimisticGuess(
+          view,
+          mode.pendingGuess,
+          confidence,
+          new Date().toISOString(),
+        ),
+      );
+      setMode({ type: "normal" });
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to check the guess.",
+      );
+      handledGuessAttemptIdsRef.current.delete(attemptId);
+      return;
+    }
+
+    enqueuePersistence(
+      () => recordGuess(supabase, user.id, attemptId, confidence),
+      "Unable to save the guess check.",
+    );
   };
 
   const handleReset = async () => {
@@ -244,6 +297,9 @@ export function SessionClient() {
     setError(null);
     setIsPending(true);
     setMode({ type: "normal" });
+    persistenceVersionRef.current += 1;
+    handledGuessAttemptIdsRef.current.clear();
+    handledQuestionKeyRef.current = null;
 
     try {
       await resetTodaySession(supabase, user.id);
@@ -328,4 +384,12 @@ export function SessionClient() {
       ) : null}
     </StudyAppShell>
   );
+}
+
+function getErrorMessage(caughtError: unknown, fallbackMessage: string) {
+  if (caughtError instanceof Error) {
+    return `${fallbackMessage} ${caughtError.message}`;
+  }
+
+  return fallbackMessage;
 }
