@@ -2,6 +2,9 @@ export const MIN_DAILY_WORD_COUNT = 5;
 export const MAX_DAILY_WORD_COUNT = 7;
 export const DEFAULT_DAILY_WORD_COUNT = 6;
 export const QUESTION_CAP = 45;
+export const MAX_DAILY_REVIEW_WORD_COUNT = 6;
+export const QUESTION_CAP_PER_WORD = 6;
+export const REVIEW_INTERVAL_DAYS = [1, 3, 7, 14, 30, 60] as const;
 export const DEFAULT_STUDY_TIME_ZONE = "America/Los_Angeles";
 
 export function getDailyWordCount() {

@@ -241,19 +241,26 @@ export function CompletionScreen({
           Complete
         </Badge>
         <CardTitle>
-          {capped ? "Question cap reached." : "Recall-ready."}
+          {capped ? "Question cap reached." : "Today is recall-ready."}
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Stat label="Words learned" value={view.stats.learnedCount} />
+          <Stat label="New words" value={view.stats.newCount} />
+          <Stat label="Reviews cleared" value={view.stats.reviewReadyCount} />
           <Stat label="Questions" value={view.stats.questionsAnswered} />
-          <Stat label="Extra review" value={view.stats.extraReviewCount} />
           <Stat
             label="Recall-ready"
             value={`${view.stats.readyCount} / ${view.words.length}`}
           />
         </div>
+        {capped && view.stats.weakCarryOverCount > 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {view.stats.weakCarryOverCount} weak{" "}
+            {view.stats.weakCarryOverCount === 1 ? "word" : "words"} will lead
+            your next review.
+          </p>
+        ) : null}
         <Separator />
         <div className="flex flex-wrap gap-2">
           {view.words.map((word) => (

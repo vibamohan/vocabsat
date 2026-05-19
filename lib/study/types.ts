@@ -16,6 +16,8 @@ export type AnswerConfidence = "known" | "guessed";
 
 export type UserWordStatus = "learning" | "weak" | "recall_ready";
 
+export type SessionWordSource = "new" | "review";
+
 export type VocabWord = {
   id: number;
   word: string;
@@ -45,6 +47,7 @@ export type SessionWord = {
   user_id: string;
   vocab_word_id: number;
   position: number;
+  source: SessionWordSource;
   status: DailyWordStatus;
   satisfied_meaning_recognition: boolean;
   satisfied_reverse_recall: boolean;
@@ -87,7 +90,10 @@ export type TodaySessionSummary =
       hasSession: false;
       availableWordCount: number;
       dailyWordCount: number;
+      dueReviewCount: number;
+      newWordCount: number;
       studyDate: string;
+      weakDueCount: number;
     }
   | {
       hasSession: true;
@@ -100,19 +106,28 @@ export type TodaySessionSummary =
       questionCap: number;
       questionsAnswered: number;
       dailyWordCount: number;
+      dueReviewCount: number;
+      newWordCount: number;
+      reviewWordCount: number;
+      weakDueCount: number;
     };
 
 export type SessionStats = {
-  learnedCount: number;
-  readyCount: number;
   extraReviewCount: number;
+  learnedCount: number;
+  newCount: number;
   questionsAnswered: number;
+  readyCount: number;
+  reviewCount: number;
+  reviewReadyCount: number;
+  weakCarryOverCount: number;
 };
 
 export type SessionView =
   | {
       screen: "learn";
       session: StudySession;
+      learnWords: SessionWordWithWord[];
       words: SessionWordWithWord[];
       currentWord: SessionWordWithWord;
       currentIndex: number;
@@ -122,6 +137,7 @@ export type SessionView =
       screen: "question";
       session: StudySession;
       words: SessionWordWithWord[];
+      optionWords: VocabWord[];
       question: StudyQuestion;
       readyCount: number;
       totalWords: number;

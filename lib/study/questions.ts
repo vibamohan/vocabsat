@@ -5,6 +5,7 @@ import {
   type SessionWordWithWord,
   type StudyQuestion,
   type StudySession,
+  type VocabWord,
 } from "@/lib/study/types";
 
 const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
@@ -52,6 +53,7 @@ export function buildNextQuestion(
   session: StudySession,
   words: SessionWordWithWord[],
   latestAttempt: LatestAttempt | null,
+  optionWords: VocabWord[] = words.map((word) => word.vocab_word),
 ): StudyQuestion | null {
   const candidates = words.filter((word) => word.status !== "recall_ready");
 
@@ -108,6 +110,7 @@ export function buildNextQuestion(
     selected.word,
     selected.questionType,
     words,
+    optionWords,
     session.total_questions_answered,
   );
 }
@@ -152,11 +155,11 @@ function getRepeatPenalty(
     latestAttempt.session_word_id === combination.word.id &&
     latestAttempt.question_type === combination.questionType
   ) {
-    return 100;
+    return 140;
   }
 
   if (latestAttempt.session_word_id === combination.word.id) {
-    return 12;
+    return 100;
   }
 
   return 0;
@@ -166,9 +169,10 @@ function createQuestion(
   target: SessionWordWithWord,
   questionType: QuestionType,
   words: SessionWordWithWord[],
+  optionWords: VocabWord[],
   seed: number,
 ): StudyQuestion {
-  const options = getOptions(target, words, questionType, seed);
+  const options = getOptions(target, words, optionWords, questionType, seed);
 
   if (questionType === "meaning_recognition") {
     return {
@@ -209,31 +213,37 @@ function createQuestion(
 function getOptions(
   target: SessionWordWithWord,
   words: SessionWordWithWord[],
+  optionWords: VocabWord[],
   questionType: QuestionType,
   seed: number,
 ) {
-  const optionWords = [
-    target,
-    ...words
-      .filter((word) => word.vocab_word_id !== target.vocab_word_id)
+  const sessionOptionWords = words.map((word) => word.vocab_word);
+  const optionsById = new Map<number, VocabWord>();
+
+  for (const word of [...sessionOptionWords, ...optionWords]) {
+    optionsById.set(word.id, word);
+  }
+
+  const optionChoices = [
+    target.vocab_word,
+    ...Array.from(optionsById.values())
+      .filter((word) => word.id !== target.vocab_word_id)
       .sort(
         (first, second) =>
-          stableRank(first.vocab_word_id, seed) -
-          stableRank(second.vocab_word_id, seed),
+          stableRank(first.id, seed) - stableRank(second.id, seed),
       )
       .slice(0, 3),
   ].sort(
     (first, second) =>
-      stableRank(first.vocab_word_id, seed + 17) -
-      stableRank(second.vocab_word_id, seed + 17),
+      stableRank(first.id, seed + 17) - stableRank(second.id, seed + 17),
   );
 
-  return optionWords.map((word) => ({
-    vocabWordId: word.vocab_word_id,
+  return optionChoices.map((word) => ({
+    vocabWordId: word.id,
     label:
       questionType === "meaning_recognition"
-        ? word.vocab_word.fast_meaning
-        : word.vocab_word.word,
+        ? word.fast_meaning
+        : word.word,
   }));
 }
 

@@ -19,3 +19,10 @@ export function getStudyDate(date = new Date()) {
 
   return `${year}-${month}-${day}`;
 }
+
+export function addDaysToStudyDate(studyDate: string, days: number) {
+  const date = new Date(`${studyDate}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+
+  return date.toISOString().slice(0, 10);
+}

@@ -56,7 +56,13 @@ export function applyOptimisticAnswer(
 
     return {
       correctionWord: updatedWord,
-      nextView: buildPracticeView(nextSession, words, latestAttempt, answeredAt),
+      nextView: buildPracticeView(
+        nextSession,
+        words,
+        latestAttempt,
+        answeredAt,
+        view.optionWords,
+      ),
     };
   }
 
@@ -84,12 +90,18 @@ export function applyOptimisticAnswer(
   );
 
   return {
-    nextView: buildPracticeView(nextSession, words, latestAttempt, answeredAt),
+    nextView: buildPracticeView(
+      nextSession,
+      words,
+      latestAttempt,
+      answeredAt,
+      view.optionWords,
+    ),
   };
 }
 
 export function applyOptimisticGuess(
-  view: SessionView,
+  view: QuestionView,
   pendingGuess: PendingGuess,
   confidence: AnswerConfidence,
   guessedAt: string,
@@ -109,6 +121,7 @@ export function applyOptimisticGuess(
       session_word_id: pendingGuess.sessionWordId,
     },
     guessedAt,
+    view.optionWords,
   );
 }
 
@@ -135,6 +148,7 @@ function buildPracticeView(
   words: SessionWordWithWord[],
   latestAttempt: LatestAttempt,
   completedAt: string,
+  optionWords: QuestionView["optionWords"],
 ): SessionView {
   const completionReason = getCompletionReason(session, words);
 
@@ -153,7 +167,7 @@ function buildPracticeView(
     };
   }
 
-  const question = buildNextQuestion(session, words, latestAttempt);
+  const question = buildNextQuestion(session, words, latestAttempt, optionWords);
 
   if (!question) {
     const completedSession = completeSession(session, "mastered", completedAt);
@@ -168,6 +182,7 @@ function buildPracticeView(
 
   return {
     screen: "question",
+    optionWords,
     question,
     readyCount: getReadyCount(words),
     session,
@@ -208,13 +223,25 @@ function getSessionStats(
   session: StudySession,
   words: SessionWordWithWord[],
 ): SessionStats {
+  const reviewWords = words.filter((word) => word.source === "review");
+
   return {
     extraReviewCount: words.filter(
       (word) => word.miss_count > 0 || word.guessed_count > 0,
     ).length,
     learnedCount: words.length,
+    newCount: words.filter((word) => word.source === "new").length,
     questionsAnswered: session.total_questions_answered,
     readyCount: getReadyCount(words),
+    reviewCount: reviewWords.length,
+    reviewReadyCount: reviewWords.filter(isRecallReady).length,
+    weakCarryOverCount: words.filter(
+      (word) =>
+        word.status !== "recall_ready" &&
+        (word.miss_count > 0 ||
+          word.guessed_count > 0 ||
+          word.status === "shaky"),
+    ).length,
   };
 }
 

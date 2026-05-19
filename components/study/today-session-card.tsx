@@ -40,7 +40,8 @@ export function TodaySessionCard({
 }: TodaySessionCardProps) {
   if (
     !summary.hasSession &&
-    summary.availableWordCount < summary.dailyWordCount
+    summary.availableWordCount < summary.dailyWordCount &&
+    summary.dueReviewCount === 0
   ) {
     return (
       <Card className="w-full max-w-xl">
@@ -61,15 +62,44 @@ export function TodaySessionCard({
     );
   }
 
+  if (!summary.hasSession && summary.newWordCount + summary.dueReviewCount === 0) {
+    return (
+      <Card className="w-full max-w-xl">
+        <CardHeader>
+          <CardTitle>Caught up</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            No new or review words are due today.
+          </p>
+        </CardContent>
+        <CardFooter>
+          <Button disabled type="button">
+            Start
+          </Button>
+        </CardFooter>
+      </Card>
+    );
+  }
+
   if (!summary.hasSession) {
     return (
       <Card className="w-full max-w-xl">
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
             <CardTitle>Today</CardTitle>
-            <Badge variant="secondary">{summary.dailyWordCount} new words</Badge>
+            <Badge variant="secondary">{formatMix(summary)}</Badge>
           </div>
         </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
+            <Badge variant="outline">{summary.newWordCount} new</Badge>
+            <Badge variant="outline">{summary.dueReviewCount} review</Badge>
+            {summary.weakDueCount > 0 ? (
+              <Badge variant="outline">{summary.weakDueCount} weak</Badge>
+            ) : null}
+          </div>
+        </CardContent>
         <CardFooter>
           <Button disabled={isBusy} onClick={onStart} type="button">
             <BookOpenCheck data-icon="inline-start" />
@@ -101,6 +131,8 @@ export function TodaySessionCard({
           />
         </div>
         <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
+          <Badge variant="outline">{summary.newWordCount} new</Badge>
+          <Badge variant="outline">{summary.reviewWordCount} review</Badge>
           <Badge variant="outline">
             {summary.questionsAnswered} / {summary.questionCap} questions
           </Badge>
@@ -134,4 +166,16 @@ export function TodaySessionCard({
 
 function formatPhase(phase: ActiveSessionPhase) {
   return phase.charAt(0).toUpperCase() + phase.slice(1);
+}
+
+function formatMix(summary: Extract<TodaySessionSummary, { hasSession: false }>) {
+  if (summary.newWordCount > 0 && summary.dueReviewCount > 0) {
+    return `${summary.newWordCount} new + ${summary.dueReviewCount} review`;
+  }
+
+  if (summary.dueReviewCount > 0) {
+    return `${summary.dueReviewCount} review`;
+  }
+
+  return `${summary.newWordCount} new`;
 }

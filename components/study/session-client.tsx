@@ -146,7 +146,7 @@ export function SessionClient() {
       setView({
         ...view,
         currentIndex: nextIndex,
-        currentWord: view.words[nextIndex],
+        currentWord: view.learnWords[nextIndex],
         session: {
           ...view.session,
           learn_index: nextIndex,
@@ -244,7 +244,7 @@ export function SessionClient() {
   };
 
   const handleGuess = (attemptId: string, confidence: AnswerConfidence) => {
-    if (!user || !view || mode.type !== "guess") {
+    if (!user || !view || view.screen !== "question" || mode.type !== "guess") {
       return;
     }
 

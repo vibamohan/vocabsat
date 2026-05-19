@@ -1,7 +1,13 @@
 "use client";
 
-import { getDailyWordCount, QUESTION_CAP } from "@/lib/study/config";
-import { getStudyDate } from "@/lib/study/dates";
+import {
+  getDailyWordCount,
+  MAX_DAILY_REVIEW_WORD_COUNT,
+  QUESTION_CAP,
+  QUESTION_CAP_PER_WORD,
+  REVIEW_INTERVAL_DAYS,
+} from "@/lib/study/config";
+import { addDaysToStudyDate, getStudyDate } from "@/lib/study/dates";
 import {
   buildNextQuestion,
   getReadyCount,
@@ -14,6 +20,7 @@ import type {
   LatestAttempt,
   PendingGuess,
   QuestionType,
+  SessionWordSource,
   SessionStats,
   SessionView,
   SessionWordWithWord,
@@ -36,6 +43,8 @@ type MasteryRow = {
   guessed_count: number;
   last_seen_at: string | null;
   last_ready_at: string | null;
+  next_review_on: string | null;
+  review_interval_days: number;
 };
 
 type AttemptRow = {
@@ -58,6 +67,12 @@ type SubmitAnswerInput = {
   selectedVocabWordId: number;
 };
 
+type SelectedSessionWord = {
+  word: VocabWord;
+  source: SessionWordSource;
+  masteryStatus: UserWordStatus | null;
+};
+
 export async function getCurrentUser(supabase: SupabaseClient) {
   const {
     data: { user },
@@ -77,6 +92,12 @@ export async function getTodaySessionSummary(
   const session = await getSessionForDate(supabase, userId, studyDate);
 
   if (!session) {
+    const selectedWords = await selectWordsForToday(
+      supabase,
+      userId,
+      dailyWordCount,
+      studyDate,
+    );
     const { count, error } = await supabase
       .from("vocab_words")
       .select("id", { count: "exact", head: true });
@@ -87,11 +108,19 @@ export async function getTodaySessionSummary(
       hasSession: false,
       availableWordCount: count ?? 0,
       dailyWordCount,
+      dueReviewCount: selectedWords.filter((entry) => entry.source === "review")
+        .length,
+      newWordCount: selectedWords.filter((entry) => entry.source === "new")
+        .length,
       studyDate,
+      weakDueCount: selectedWords.filter(
+        (entry) => entry.source === "review" && entry.masteryStatus === "weak",
+      ).length,
     };
   }
 
   const words = await getSessionWords(supabase, userId, session.id);
+  const reviewWords = words.filter((word) => word.source === "review");
 
   return {
     hasSession: true,
@@ -102,7 +131,16 @@ export async function getTodaySessionSummary(
     questionCap: session.question_cap,
     questionsAnswered: session.total_questions_answered,
     readyCount: getReadyCount(words),
+    dueReviewCount: reviewWords.length,
+    newWordCount: words.filter((word) => word.source === "new").length,
+    reviewWordCount: reviewWords.length,
     studyDate,
+    weakDueCount: reviewWords.filter(
+      (word) =>
+        word.status === "shaky" ||
+        word.miss_count > 0 ||
+        word.guessed_count > 0,
+    ).length,
     wordCount: words.length,
   };
 }
@@ -115,7 +153,7 @@ export async function startOrContinueTodaySession(
   const existingSession = await getSessionForDate(supabase, userId, studyDate);
 
   if (existingSession) {
-    return existingSession;
+    return ensureSessionHasWords(supabase, userId, existingSession, studyDate);
   }
 
   const dailyWordCount = getDailyWordCount();
@@ -123,11 +161,12 @@ export async function startOrContinueTodaySession(
     supabase,
     userId,
     dailyWordCount,
+    studyDate,
   );
 
-  if (selectedWords.length < dailyWordCount) {
+  if (selectedWords.length === 0) {
     throw new Error(
-      `Seed at least ${dailyWordCount} vocabulary words before starting a session.`,
+      "No new or due review words are available for today.",
     );
   }
 
@@ -136,7 +175,7 @@ export async function startOrContinueTodaySession(
     .insert({
       daily_word_count: dailyWordCount,
       phase: "learn",
-      question_cap: QUESTION_CAP,
+      question_cap: getQuestionCap(selectedWords.length),
       study_date: studyDate,
       user_id: userId,
     })
@@ -157,11 +196,12 @@ export async function startOrContinueTodaySession(
     "Unable to create today's session",
   );
 
-  const sessionWords = selectedWords.map((word, index) => ({
+  const sessionWords = selectedWords.map((entry, index) => ({
+    ...getInitialSessionWordState(entry),
     position: index,
     session_id: session.id,
     user_id: userId,
-    vocab_word_id: word.id,
+    vocab_word_id: entry.word.id,
   }));
 
   const { error: wordsError } = await supabase
@@ -174,14 +214,73 @@ export async function startOrContinueTodaySession(
   return session;
 }
 
+async function ensureSessionHasWords(
+  supabase: SupabaseClient,
+  userId: string,
+  session: StudySession,
+  studyDate: string,
+) {
+  const existingWords = await getSessionWords(supabase, userId, session.id);
+
+  if (existingWords.length > 0) {
+    return session;
+  }
+
+  const dailyWordCount = getDailyWordCount();
+  const selectedWords = await selectWordsForToday(
+    supabase,
+    userId,
+    dailyWordCount,
+    studyDate,
+  );
+
+  if (selectedWords.length === 0) {
+    throw new Error("No new or due review words are available for today.");
+  }
+
+  const sessionWords = selectedWords.map((entry, index) => ({
+    ...getInitialSessionWordState(entry),
+    position: index,
+    session_id: session.id,
+    user_id: userId,
+    vocab_word_id: entry.word.id,
+  }));
+
+  const { error: wordsError } = await supabase
+    .from("study_session_words")
+    .insert(sessionWords);
+
+  assertNoError(wordsError, "Unable to attach words to today's session");
+  await markWordsSeen(supabase, userId, selectedWords);
+
+  const { data, error } = await supabase
+    .from("study_sessions")
+    .update({
+      completed_at: null,
+      completion_reason: null,
+      daily_word_count: dailyWordCount,
+      learn_index: 0,
+      phase: "learn",
+      question_cap: getQuestionCap(selectedWords.length),
+      total_questions_answered: 0,
+    })
+    .eq("id", session.id)
+    .eq("user_id", userId)
+    .select("*")
+    .single();
+
+  return requireRow<StudySession>(data, error, "Unable to repair today's session");
+}
+
 export async function getSessionView(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<SessionView> {
   let session = await startOrContinueTodaySession(supabase, userId);
   let words = await getSessionWords(supabase, userId, session.id);
+  const learnWords = getLearnWords(words);
 
-  if (session.phase === "learn" && session.learn_index >= words.length) {
+  if (session.phase === "learn" && session.learn_index >= learnWords.length) {
     session = await updateSessionPhase(supabase, userId, session.id, "practice");
   }
 
@@ -211,8 +310,9 @@ export async function advanceLearn(
   session: StudySession,
   words: SessionWordWithWord[],
 ) {
-  const nextIndex = Math.min(session.learn_index + 1, words.length);
-  const nextPhase = nextIndex >= words.length ? "practice" : "learn";
+  const learnWords = getLearnWords(words);
+  const nextIndex = Math.min(session.learn_index + 1, learnWords.length);
+  const nextPhase = nextIndex >= learnWords.length ? "practice" : "learn";
 
   const { error } = await supabase
     .from("study_sessions")
@@ -248,7 +348,13 @@ export async function submitAnswer(
 
   const words = await getSessionWords(supabase, userId, session.id);
   const latestAttempt = await getLatestAttempt(supabase, session.id);
-  const currentQuestion = buildNextQuestion(session, words, latestAttempt);
+  const optionWords = await getQuestionOptionWords(supabase);
+  const currentQuestion = buildNextQuestion(
+    session,
+    words,
+    latestAttempt,
+    optionWords,
+  );
 
   if (
     !currentQuestion ||
@@ -485,15 +591,17 @@ async function buildSessionView(
   }
 
   if (session.phase === "learn") {
-    const currentWord = words[session.learn_index];
+    const learnWords = getLearnWords(words);
+    const currentWord = learnWords[session.learn_index];
 
     if (currentWord) {
       return {
         screen: "learn",
         currentIndex: session.learn_index,
         currentWord,
+        learnWords,
         session,
-        totalWords: words.length,
+        totalWords: learnWords.length,
         words,
       };
     }
@@ -509,7 +617,8 @@ async function buildSessionView(
   }
 
   const latestAttempt = await getLatestAttempt(supabase, session.id);
-  const question = buildNextQuestion(session, words, latestAttempt);
+  const optionWords = await getQuestionOptionWords(supabase);
+  const question = buildNextQuestion(session, words, latestAttempt, optionWords);
 
   if (!question) {
     const completedSession = await completeSession(
@@ -530,11 +639,16 @@ async function buildSessionView(
   return {
     screen: "question",
     question,
+    optionWords,
     readyCount: getReadyCount(words),
     session,
     totalWords: words.length,
     words,
   };
+}
+
+function getLearnWords(words: SessionWordWithWord[]) {
+  return words.filter((word) => word.source === "new");
 }
 
 async function getSessionForDate(
@@ -595,6 +709,17 @@ async function getSessionWords(
   assertNoError(error, "Unable to load session words");
 
   return (data ?? []) as SessionWordWithWord[];
+}
+
+async function getQuestionOptionWords(supabase: SupabaseClient) {
+  const { data, error } = await supabase
+    .from("vocab_words")
+    .select("id, word, fast_meaning, example_sentence, sort_order")
+    .order("sort_order", { ascending: true });
+
+  assertNoError(error, "Unable to load question options");
+
+  return (data ?? []) as VocabWord[];
 }
 
 async function getSessionWordById(
@@ -663,7 +788,8 @@ async function selectWordsForToday(
   supabase: SupabaseClient,
   userId: string,
   limit: number,
-) {
+  studyDate: string,
+): Promise<SelectedSessionWord[]> {
   const [
     { data: masteryData, error: masteryError },
     { data: wordData, error: wordError },
@@ -671,7 +797,7 @@ async function selectWordsForToday(
     supabase
       .from("user_word_mastery")
       .select(
-        "user_id, vocab_word_id, status, correct_count, miss_count, guessed_count, last_seen_at, last_ready_at",
+        "user_id, vocab_word_id, status, correct_count, miss_count, guessed_count, last_seen_at, last_ready_at, next_review_on, review_interval_days",
       )
       .eq("user_id", userId),
     supabase
@@ -696,11 +822,18 @@ async function selectWordsForToday(
     compareWordsByUserOrder(first, second, wordOrderRankById),
   );
   const seenWordIds = new Set(masteryRows.map((row) => row.vocab_word_id));
-  const selected = new Map<number, VocabWord>();
+  const selected = new Map<number, SelectedSessionWord>();
 
   masteryRows
-    .filter((row) => row.status === "weak" || row.status === "learning")
+    .filter((row) => isDueForReview(row, studyDate))
     .sort((first, second) => {
+      const statusComparison =
+        getDueReviewStatusPriority(second) - getDueReviewStatusPriority(first);
+
+      if (statusComparison !== 0) {
+        return statusComparison;
+      }
+
       const firstScore = getMasteryPriority(first);
       const secondScore = getMasteryPriority(second);
 
@@ -725,30 +858,88 @@ async function selectWordsForToday(
     .forEach((row) => {
       const word = wordsById.get(row.vocab_word_id);
 
-      if (word && selected.size < limit) {
-        selected.set(word.id, word);
+      if (word && selected.size < MAX_DAILY_REVIEW_WORD_COUNT) {
+        selected.set(word.id, {
+          masteryStatus: row.status,
+          source: "review",
+          word,
+        });
       }
     });
 
   for (const word of wordsByUserOrder) {
-    if (selected.size >= limit) {
+    const newWordCount = getSelectedSourceCount(selected, "new");
+
+    if (newWordCount >= limit) {
       break;
     }
 
     if (!seenWordIds.has(word.id)) {
-      selected.set(word.id, word);
+      selected.set(word.id, {
+        masteryStatus: null,
+        source: "new",
+        word,
+      });
     }
   }
 
-  for (const word of wordsByUserOrder) {
-    if (selected.size >= limit) {
-      break;
-    }
+  return Array.from(selected.values());
+}
 
-    selected.set(word.id, word);
+function getQuestionCap(wordCount: number) {
+  return Math.max(QUESTION_CAP, wordCount * QUESTION_CAP_PER_WORD);
+}
+
+function getInitialSessionWordState(entry: SelectedSessionWord) {
+  const baseState = {
+    satisfied_meaning_recognition: false,
+    satisfied_reverse_recall: false,
+    satisfied_sat_usage: false,
+    source: entry.source,
+    status: "new" as const,
+  };
+
+  if (entry.source === "new") {
+    return baseState;
   }
 
-  return Array.from(selected.values()).slice(0, limit);
+  if (entry.masteryStatus === "recall_ready") {
+    return {
+      ...baseState,
+      satisfied_meaning_recognition: true,
+      satisfied_reverse_recall: true,
+      status: "stable" as const,
+    };
+  }
+
+  return {
+    ...baseState,
+    status: "shaky" as const,
+  };
+}
+
+function getSelectedSourceCount(
+  selected: Map<number, SelectedSessionWord>,
+  source: SessionWordSource,
+) {
+  return Array.from(selected.values()).filter((entry) => entry.source === source)
+    .length;
+}
+
+function isDueForReview(row: MasteryRow, studyDate: string) {
+  return Boolean(row.next_review_on && row.next_review_on <= studyDate);
+}
+
+function getDueReviewStatusPriority(row: MasteryRow) {
+  if (row.status === "weak") {
+    return 3;
+  }
+
+  if (row.status === "learning") {
+    return 2;
+  }
+
+  return 1;
 }
 
 function getMasteryPriority(row: MasteryRow) {
@@ -819,14 +1010,15 @@ function hashString(value: string) {
 async function markWordsSeen(
   supabase: SupabaseClient,
   userId: string,
-  words: VocabWord[],
+  selectedWords: SelectedSessionWord[],
 ) {
   const now = new Date().toISOString();
-  const wordIds = words.map((word) => word.id);
+  const tomorrow = addDaysToStudyDate(getStudyDate(), REVIEW_INTERVAL_DAYS[0]);
+  const wordIds = selectedWords.map((entry) => entry.word.id);
   const { data, error } = await supabase
     .from("user_word_mastery")
     .select(
-      "user_id, vocab_word_id, status, correct_count, miss_count, guessed_count, last_seen_at, last_ready_at",
+      "user_id, vocab_word_id, status, correct_count, miss_count, guessed_count, last_seen_at, last_ready_at, next_review_on, review_interval_days",
     )
     .eq("user_id", userId)
     .in("vocab_word_id", wordIds);
@@ -837,14 +1029,21 @@ async function markWordsSeen(
     ((data ?? []) as MasteryRow[]).map((row) => [row.vocab_word_id, row]),
   );
 
-  const rows = words.map((word) => {
-    const existing = existingRows.get(word.id);
+  const rows = selectedWords.map((entry) => {
+    const existing = existingRows.get(entry.word.id);
 
     return {
       last_seen_at: now,
-      status: existing?.status === "weak" ? "weak" : "learning",
+      next_review_on: existing?.next_review_on ?? tomorrow,
+      review_interval_days: existing?.review_interval_days ?? 0,
+      status:
+        entry.source === "new"
+          ? "learning"
+          : existing?.status === "weak"
+            ? "weak"
+            : existing?.status ?? "learning",
       user_id: userId,
-      vocab_word_id: word.id,
+      vocab_word_id: entry.word.id,
     };
   });
 
@@ -1029,7 +1228,7 @@ async function updateMasteryAfterAttempt(
   const { data, error } = await supabase
     .from("user_word_mastery")
     .select(
-      "user_id, vocab_word_id, status, correct_count, miss_count, guessed_count, last_seen_at, last_ready_at",
+      "user_id, vocab_word_id, status, correct_count, miss_count, guessed_count, last_seen_at, last_ready_at, next_review_on, review_interval_days",
     )
     .eq("user_id", userId)
     .eq("vocab_word_id", vocabWordId)
@@ -1043,6 +1242,12 @@ async function updateMasteryAfterAttempt(
     : result.isCorrect && !result.guessed
       ? "learning"
       : "weak";
+  const nextIntervalDays = getNextReviewIntervalDays(existing, result);
+  const daysUntilReview =
+    result.isCorrect && !result.guessed && !result.isRecallReady
+      ? REVIEW_INTERVAL_DAYS[0]
+      : nextIntervalDays;
+  const nextReviewOn = addDaysToStudyDate(getStudyDate(), daysUntilReview);
 
   const { error: upsertError } = await supabase
     .from("user_word_mastery")
@@ -1055,6 +1260,8 @@ async function updateMasteryAfterAttempt(
         last_ready_at: result.isRecallReady ? now : existing?.last_ready_at ?? null,
         last_seen_at: now,
         miss_count: (existing?.miss_count ?? 0) + (result.isCorrect ? 0 : 1),
+        next_review_on: nextReviewOn,
+        review_interval_days: nextIntervalDays,
         status: nextStatus,
         user_id: userId,
         vocab_word_id: vocabWordId,
@@ -1063,6 +1270,29 @@ async function updateMasteryAfterAttempt(
     );
 
   assertNoError(upsertError, "Unable to update word mastery");
+}
+
+function getNextReviewIntervalDays(
+  existing: MasteryRow | null,
+  result: {
+    isCorrect: boolean;
+    guessed: boolean;
+    isRecallReady: boolean;
+  },
+) {
+  if (!result.isCorrect || result.guessed) {
+    return REVIEW_INTERVAL_DAYS[0];
+  }
+
+  if (!result.isRecallReady) {
+    return existing?.review_interval_days ?? 0;
+  }
+
+  const currentInterval = existing?.review_interval_days ?? 0;
+  return (
+    REVIEW_INTERVAL_DAYS.find((interval) => interval > currentInterval) ??
+    REVIEW_INTERVAL_DAYS[REVIEW_INTERVAL_DAYS.length - 1]
+  );
 }
 
 async function reconcileCompletionAfterAttempt(
@@ -1090,10 +1320,39 @@ async function reconcileCompletion(
   }
 
   if (session.total_questions_answered >= session.question_cap) {
+    await scheduleCarryOverWords(supabase, userId, words);
     return completeSession(supabase, userId, session, "question_cap");
   }
 
   return session;
+}
+
+async function scheduleCarryOverWords(
+  supabase: SupabaseClient,
+  userId: string,
+  words: SessionWordWithWord[],
+) {
+  const carryOverWordIds = words
+    .filter((word) => word.status !== "recall_ready")
+    .map((word) => word.vocab_word_id);
+
+  if (carryOverWordIds.length === 0) {
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from("user_word_mastery")
+    .update({
+      last_seen_at: now,
+      next_review_on: addDaysToStudyDate(getStudyDate(), REVIEW_INTERVAL_DAYS[0]),
+      review_interval_days: REVIEW_INTERVAL_DAYS[0],
+      status: "weak",
+    })
+    .eq("user_id", userId)
+    .in("vocab_word_id", carryOverWordIds);
+
+  assertNoError(error, "Unable to schedule carry-over words");
 }
 
 async function completeSession(
@@ -1125,13 +1384,25 @@ function getSessionStats(
   session: StudySession,
   words: SessionWordWithWord[],
 ): SessionStats {
+  const reviewWords = words.filter((word) => word.source === "review");
+
   return {
     extraReviewCount: words.filter(
       (word) => word.miss_count > 0 || word.guessed_count > 0,
     ).length,
     learnedCount: words.length,
+    newCount: words.filter((word) => word.source === "new").length,
     questionsAnswered: session.total_questions_answered,
     readyCount: getReadyCount(words),
+    reviewCount: reviewWords.length,
+    reviewReadyCount: reviewWords.filter(isRecallReady).length,
+    weakCarryOverCount: words.filter(
+      (word) =>
+        word.status !== "recall_ready" &&
+        (word.miss_count > 0 ||
+          word.guessed_count > 0 ||
+          word.status === "shaky"),
+    ).length,
   };
 }
 
