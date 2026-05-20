@@ -18,8 +18,7 @@
 ## Testing Guidelines
 
 - No automated test suite is present yet.
-- It is not the agent's responsibility to test code, and it should not attempt to run commands like `npm run dev`. Ask the programmer to test if necessary.
-- Ask the programmer to run any `npm` commands adding libraries
+- The agent should not attempt to run `npm install` or `npm run dev`. Ask the programmer to test or install additional libraries if necessary. The agent may run commands like `npm run test` or `npm run build` to verify code works.
 
 ## Configuration & Security Tips
 
