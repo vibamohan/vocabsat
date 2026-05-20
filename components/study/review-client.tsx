@@ -102,7 +102,7 @@ export function ReviewClient() {
           persistenceVersionRef.current += 1;
           handledGuessAttemptIdsRef.current.clear();
           handledQuestionKeyRef.current = null;
-          setError(getErrorMessage(caughtError, "Unable to save review progress."));
+          setError(getErrorMessage(caughtError, fallbackMessage));
 
           try {
             await refreshView();
@@ -325,6 +325,16 @@ export function ReviewClient() {
         <CorrectionScreen
           isPending={isPending}
           onContinue={handleCorrectionContinue}
+          progressContext={
+            view
+              ? {
+                  readyCount: view.readyCount,
+                  strengthenedCount: view.checkpoint.strengthenedCount,
+                  variant: "review",
+                  words: view.words,
+                }
+              : undefined
+          }
           word={mode.word}
         />
       ) : null}
@@ -334,6 +344,16 @@ export function ReviewClient() {
           isPending={isPending}
           onGuess={handleGuess}
           pendingGuess={mode.pendingGuess}
+          progressContext={
+            view
+              ? {
+                  readyCount: view.readyCount,
+                  strengthenedCount: view.checkpoint.strengthenedCount,
+                  variant: "review",
+                  words: view.words,
+                }
+              : undefined
+          }
         />
       ) : null}
 

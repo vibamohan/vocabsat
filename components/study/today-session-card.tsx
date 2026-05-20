@@ -110,32 +110,40 @@ export function TodaySessionCard({
     );
   }
 
-  const progress = Math.round((summary.readyCount / summary.wordCount) * 100);
+  const progress = summary.masteryProgressPercent;
   const isComplete = summary.completed;
+  const isCapped = summary.completionReason === "question_cap";
 
   return (
     <Card className="w-full max-w-xl">
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
-          <CardTitle>{isComplete ? "Recall-ready" : "Today"}</CardTitle>
+          <CardTitle>
+            {isCapped ? "Practice limit" : isComplete ? "Recall-ready" : "Today"}
+          </CardTitle>
           <Badge variant={isComplete ? "default" : "secondary"}>
-            {summary.readyCount} of {summary.wordCount} ready
+            {progress}% mastered
           </Badge>
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <div className="h-2 overflow-hidden rounded-full bg-muted">
+        <div
+          aria-label="Daily mastery"
+          aria-valuemax={100}
+          aria-valuemin={0}
+          aria-valuenow={progress}
+          className="h-2.5 overflow-hidden rounded-full bg-muted"
+          role="progressbar"
+        >
           <div
-            className="h-full rounded-full bg-primary"
+            className="h-full rounded-full bg-primary shadow-sm transition-[width] duration-500 ease-out"
             style={{ width: `${progress}%` }}
           />
         </div>
         <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
           <Badge variant="outline">{summary.newWordCount} new</Badge>
           <Badge variant="outline">{summary.reviewWordCount} review</Badge>
-          <Badge variant="outline">
-            {summary.questionsAnswered} / {summary.questionCap} questions
-          </Badge>
+          <Badge variant="outline">{summary.readyCount} ready</Badge>
           <Badge variant="outline">{formatPhase(summary.phase)}</Badge>
         </div>
       </CardContent>

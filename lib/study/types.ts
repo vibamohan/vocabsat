@@ -104,6 +104,7 @@ export type TodaySessionSummary =
       phase: StudySessionPhase;
       completed: boolean;
       completionReason: CompletionReason | null;
+      masteryProgressPercent: number;
       readyCount: number;
       wordCount: number;
       questionCap: number;

@@ -19,6 +19,7 @@
 
 - No automated test suite is present yet.
 - It is not the agent's responsibility to test code, and it should not attempt to run commands like `npm run dev`. Ask the programmer to test if necessary.
+- Ask the programmer to run any `npm` commands adding libraries
 
 ## Configuration & Security Tips
 

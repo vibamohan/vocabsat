@@ -17,6 +17,7 @@ import {
   isQuestionTypeSatisfied,
   isRecallReady,
 } from "@/lib/study/questions";
+import { getStudyProgress } from "@/lib/study/progress";
 import type {
   AnswerConfidence,
   DailyWordStatus,
@@ -134,6 +135,7 @@ export async function getTodaySessionSummary(
     completed: session.phase === "complete",
     completionReason: session.completion_reason,
     dailyWordCount: session.daily_word_count,
+    masteryProgressPercent: getStudyProgress(words).percent,
     phase: session.phase,
     questionCap: session.question_cap,
     questionsAnswered: session.total_questions_answered,

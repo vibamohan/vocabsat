@@ -402,6 +402,15 @@ export function SessionClient() {
         <CorrectionScreen
           isPending={isPending}
           onContinue={handleCorrectionContinue}
+          progressContext={
+            view?.screen === "question"
+              ? {
+                  readyCount: view.readyCount,
+                  variant: "daily",
+                  words: view.words,
+                }
+              : undefined
+          }
           word={mode.word}
         />
       ) : null}
@@ -411,6 +420,15 @@ export function SessionClient() {
           isPending={isPending}
           onGuess={handleGuess}
           pendingGuess={mode.pendingGuess}
+          progressContext={
+            view?.screen === "question"
+              ? {
+                  readyCount: view.readyCount,
+                  variant: "daily",
+                  words: view.words,
+                }
+              : undefined
+          }
         />
       ) : null}
     </StudyAppShell>

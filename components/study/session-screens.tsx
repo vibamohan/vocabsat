@@ -1,12 +1,14 @@
 "use client";
 
 import { ArrowRight, BookOpenCheck, Check, RotateCcw, X } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
+  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
@@ -14,6 +16,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { getPrimaryExampleSentence } from "@/lib/study/example-sentences";
 import { getQuestionTypeLabel } from "@/lib/study/questions";
+import { getStudyProgress, type StudyProgress } from "@/lib/study/progress";
 import type {
   AnswerConfidence,
   ForeverReviewCheckpoint,
@@ -29,6 +32,12 @@ type LearnView = Extract<SessionView, { screen: "learn" }>;
 type QuestionView = Extract<SessionView, { screen: "question" }>;
 type CompleteView = Extract<SessionView, { screen: "complete" }>;
 type QuestionScreenView = QuestionView | ForeverReviewView;
+type StudyProgressContext = {
+  readyCount: number;
+  strengthenedCount?: number;
+  variant: "daily" | "review";
+  words: SessionWordWithWord[];
+};
 
 const ANSWER_LETTERS = ["A", "B", "C", "D", "E", "F", "G"];
 
@@ -108,66 +117,48 @@ export function QuestionScreen({
   variant?: "daily" | "review";
   view: QuestionScreenView;
 }) {
-  const progress = Math.round((view.readyCount / view.totalWords) * 100);
+  const strengthenedCount =
+    "checkpoint" in view ? view.checkpoint.strengthenedCount : 0;
 
   return (
-    <Card className="w-full max-w-3xl">
-      <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          {variant === "review" ? (
-            <>
-              <Badge variant="secondary">Forever Review</Badge>
-              <Badge variant="outline">
-                {view.session.total_questions_answered} questions
-              </Badge>
-            </>
-          ) : (
-            <>
-              <Badge variant="secondary">
-                {view.readyCount} of {view.totalWords} recall-ready
-              </Badge>
-              <Badge variant="outline">
-                {view.session.total_questions_answered} /{" "}
-                {view.session.question_cap} questions
-              </Badge>
-            </>
-          )}
-        </div>
-        {variant === "daily" ? (
-          <div className="h-2 overflow-hidden rounded-full bg-muted">
-            <div
-              className="h-full rounded-full bg-primary"
-              style={{ width: `${progress}%` }}
-            />
+    <StudyStage
+      progressContext={{
+        readyCount: view.readyCount,
+        strengthenedCount,
+        variant,
+        words: view.words,
+      }}
+    >
+      <Card className="w-full">
+        <CardHeader className="gap-3 p-5 sm:p-7">
+          <CardDescription className="font-medium">
+            {getQuestionTypeLabel(view.question.questionType)}
+          </CardDescription>
+          <CardTitle className="text-2xl leading-snug sm:text-3xl">
+            {view.question.prompt}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col gap-3">
+            {view.question.options.map((option, index) => (
+              <Button
+                key={option.vocabWordId}
+                className="h-auto min-h-14 justify-start whitespace-normal px-4 py-3 text-left"
+                disabled={isPending}
+                onClick={() => onAnswer(view.question, option.vocabWordId)}
+                type="button"
+                variant="outline"
+              >
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-muted text-xs font-semibold">
+                  {ANSWER_LETTERS[index]}
+                </span>
+                <span className="leading-relaxed">{option.label}</span>
+              </Button>
+            ))}
           </div>
-        ) : null}
-        <p className="text-sm font-medium text-muted-foreground">
-          {getQuestionTypeLabel(view.question.questionType)}
-        </p>
-        <CardTitle className="text-2xl leading-snug">
-          {view.question.prompt}
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="flex flex-col gap-3">
-          {view.question.options.map((option, index) => (
-            <Button
-              key={option.vocabWordId}
-              className="h-auto min-h-14 justify-start whitespace-normal px-4 py-3 text-left"
-              disabled={isPending}
-              onClick={() => onAnswer(view.question, option.vocabWordId)}
-              type="button"
-              variant="outline"
-            >
-              <span className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-muted text-xs font-semibold">
-                {ANSWER_LETTERS[index]}
-              </span>
-              <span className="leading-relaxed">{option.label}</span>
-            </Button>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+    </StudyStage>
   );
 }
 
@@ -220,40 +211,44 @@ export function ReviewStartScreen({
 export function CorrectionScreen({
   isPending,
   onContinue,
+  progressContext,
   word,
 }: {
   isPending?: boolean;
   onContinue: () => void;
+  progressContext?: StudyProgressContext;
   word: SessionWordWithWord;
 }) {
   return (
-    <Card className="w-full max-w-2xl">
-      <CardHeader>
-        <Badge variant="destructive" className="w-fit">
-          Incorrect
-        </Badge>
-        <CardTitle className="text-4xl leading-tight">
-          {capitalize(word.vocab_word.word)}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <div className="flex flex-col gap-2">
-          <p className="text-lg leading-relaxed">
-            {word.vocab_word.fast_meaning}
+    <StudyStage progressContext={progressContext}>
+      <Card className="w-full">
+        <CardHeader>
+          <Badge variant="destructive" className="w-fit">
+            Incorrect
+          </Badge>
+          <CardTitle className="text-4xl leading-tight">
+            {capitalize(word.vocab_word.word)}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <p className="text-lg leading-relaxed">
+              {word.vocab_word.fast_meaning}
+            </p>
+          </div>
+          <Separator />
+          <p className="leading-relaxed text-muted-foreground">
+            {getPrimaryExampleSentence(word.vocab_word.example_sentence)}
           </p>
-        </div>
-        <Separator />
-        <p className="leading-relaxed text-muted-foreground">
-          {getPrimaryExampleSentence(word.vocab_word.example_sentence)}
-        </p>
-      </CardContent>
-      <CardFooter>
-        <Button disabled={isPending} onClick={onContinue} type="button">
-          Continue
-          <ArrowRight data-icon="inline-end" />
-        </Button>
-      </CardFooter>
-    </Card>
+        </CardContent>
+        <CardFooter>
+          <Button disabled={isPending} onClick={onContinue} type="button">
+            Continue
+            <ArrowRight data-icon="inline-end" />
+          </Button>
+        </CardFooter>
+      </Card>
+    </StudyStage>
   );
 }
 
@@ -261,48 +256,52 @@ export function GuessCheckScreen({
   isPending,
   onGuess,
   pendingGuess,
+  progressContext,
 }: {
   isPending?: boolean;
   onGuess: (attemptId: string, confidence: AnswerConfidence) => void;
   pendingGuess: PendingGuess;
+  progressContext?: StudyProgressContext;
 }) {
   return (
-    <Card className="w-full max-w-2xl">
-      <CardHeader>
-        <Badge variant="secondary" className="w-fit">
-          Check
-        </Badge>
-        <CardTitle className="text-4xl leading-tight">
-          {capitalize(pendingGuess.word.word)}
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <p className="text-lg leading-relaxed">
-          {pendingGuess.word.fast_meaning}
-        </p>
-      </CardContent>
-      <CardFooter>
-        <div className="flex flex-wrap gap-3">
-          <Button
-            disabled={isPending}
-            onClick={() => onGuess(pendingGuess.attemptId, "known")}
-            type="button"
-          >
-            <Check data-icon="inline-start" />
-            Knew it
-          </Button>
-          <Button
-            disabled={isPending}
-            onClick={() => onGuess(pendingGuess.attemptId, "guessed")}
-            type="button"
-            variant="outline"
-          >
-            <RotateCcw data-icon="inline-start" />
-            Guessed
-          </Button>
-        </div>
-      </CardFooter>
-    </Card>
+    <StudyStage progressContext={progressContext}>
+      <Card className="w-full">
+        <CardHeader>
+          <Badge variant="secondary" className="w-fit">
+            Check
+          </Badge>
+          <CardTitle className="text-4xl leading-tight">
+            {capitalize(pendingGuess.word.word)}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-lg leading-relaxed">
+            {pendingGuess.word.fast_meaning}
+          </p>
+        </CardContent>
+        <CardFooter>
+          <div className="flex flex-wrap gap-3">
+            <Button
+              disabled={isPending}
+              onClick={() => onGuess(pendingGuess.attemptId, "known")}
+              type="button"
+            >
+              <Check data-icon="inline-start" />
+              Knew it
+            </Button>
+            <Button
+              disabled={isPending}
+              onClick={() => onGuess(pendingGuess.attemptId, "guessed")}
+              type="button"
+              variant="outline"
+            >
+              <RotateCcw data-icon="inline-start" />
+              Guessed
+            </Button>
+          </div>
+        </CardFooter>
+      </Card>
+    </StudyStage>
   );
 }
 
@@ -322,14 +321,13 @@ export function CompletionScreen({
           Complete
         </Badge>
         <CardTitle>
-          {capped ? "Question cap reached." : "Today is recall-ready."}
+          {capped ? "Practice limit reached." : "Today is recall-ready."}
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-3">
           <Stat label="New words" value={view.stats.newCount} />
           <Stat label="Reviews cleared" value={view.stats.reviewReadyCount} />
-          <Stat label="Questions" value={view.stats.questionsAnswered} />
           <Stat
             label="Recall-ready"
             value={`${view.stats.readyCount} / ${view.words.length}`}
@@ -383,8 +381,7 @@ export function ReviewCheckpointScreen({
         <CardTitle>Review checkpoint</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Stat label="questions answered" value={checkpoint.questionsAnswered} />
+        <div className="grid gap-4 sm:grid-cols-3">
           <Stat label="correct" value={checkpoint.correctCount} />
           <Stat label="weak words found" value={checkpoint.weakWordsFound} />
           <Stat label="word strengthened" value={checkpoint.strengthenedCount} />
@@ -416,6 +413,121 @@ function Stat({ label, value }: { label: string; value: number | string }) {
     <div className="border-l pl-4">
       <p className="text-2xl font-semibold">{value}</p>
       <p className="text-sm text-muted-foreground">{label}</p>
+    </div>
+  );
+}
+
+function StudyStage({
+  children,
+  progressContext,
+}: {
+  children: ReactNode;
+  progressContext?: StudyProgressContext;
+}) {
+  return (
+    <div className="flex w-full max-w-3xl flex-col gap-4">
+      {progressContext ? (
+        <StudyProgressHeader progressContext={progressContext} />
+      ) : null}
+      {children}
+    </div>
+  );
+}
+
+function StudyProgressHeader({
+  progressContext,
+}: {
+  progressContext: StudyProgressContext;
+}) {
+  const progress = getStudyProgress(progressContext.words);
+
+  return (
+    <div className="flex flex-col gap-3 px-1">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <Badge variant="secondary">
+          {progressContext.variant === "review"
+            ? "Forever Review"
+            : "Recall practice"}
+        </Badge>
+        <div className="flex flex-wrap gap-2">
+          {progressContext.variant === "review" ? (
+            <Badge variant="outline">
+              {progressContext.strengthenedCount ?? 0} strengthened
+            </Badge>
+          ) : (
+            <Badge variant="outline">
+              {progressContext.readyCount} recall-ready
+            </Badge>
+          )}
+        </div>
+      </div>
+      <StudyProgressMeter
+        label={
+          progressContext.variant === "review"
+            ? "Review strength"
+            : "Daily mastery"
+        }
+        progress={progress}
+      />
+    </div>
+  );
+}
+
+function StudyProgressMeter({
+  label,
+  progress,
+}: {
+  label: string;
+  progress: StudyProgress;
+}) {
+  const showSegments =
+    progress.wordProgress.length > 0 && progress.wordProgress.length <= 12;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-3 text-xs font-medium text-muted-foreground">
+        <span>{label}</span>
+        <span>{progress.percent}%</span>
+      </div>
+      {showSegments ? (
+        <div
+          aria-label={label}
+          aria-valuemax={100}
+          aria-valuemin={0}
+          aria-valuenow={progress.percent}
+          className="grid gap-1"
+          role="progressbar"
+          style={{
+            gridTemplateColumns: `repeat(${progress.wordProgress.length}, minmax(0, 1fr))`,
+          }}
+        >
+          {progress.wordProgress.map((word) => (
+            <div
+              className="h-2.5 overflow-hidden rounded-full bg-muted"
+              key={word.id}
+            >
+              <div
+                className="h-full rounded-full bg-primary shadow-sm transition-[width] duration-500 ease-out"
+                style={{ width: `${word.percent}%` }}
+              />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div
+          aria-label={label}
+          aria-valuemax={100}
+          aria-valuemin={0}
+          aria-valuenow={progress.percent}
+          className="h-2.5 overflow-hidden rounded-full bg-muted"
+          role="progressbar"
+        >
+          <div
+            className="h-full rounded-full bg-primary shadow-sm transition-[width] duration-500 ease-out"
+            style={{ width: `${progress.percent}%` }}
+          />
+        </div>
+      )}
     </div>
   );
 }
