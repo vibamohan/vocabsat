@@ -35,10 +35,12 @@ const ANSWER_LETTERS = ["A", "B", "C", "D", "E", "F", "G"];
 export function LearnScreen({
   isPending,
   onContinue,
+  onReplaceKnown,
   view,
 }: {
   isPending?: boolean;
   onContinue: () => void;
+  onReplaceKnown: () => void;
   view: LearnView;
 }) {
   return (
@@ -75,10 +77,21 @@ export function LearnScreen({
         </div>
       </CardContent>
       <CardFooter>
-        <Button disabled={isPending} onClick={onContinue} type="button">
-          Continue
-          <ArrowRight data-icon="inline-end" />
-        </Button>
+        <div className="flex flex-wrap gap-3">
+          <Button disabled={isPending} onClick={onContinue} type="button">
+            Continue
+            <ArrowRight data-icon="inline-end" />
+          </Button>
+          <Button
+            disabled={isPending}
+            onClick={onReplaceKnown}
+            type="button"
+            variant="outline"
+          >
+            <Check data-icon="inline-start" />
+            Already know it
+          </Button>
+        </div>
       </CardFooter>
     </Card>
   );

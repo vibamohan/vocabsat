@@ -474,6 +474,69 @@ export async function advanceLearn(
   assertNoError(error, "Unable to advance the learn card");
 }
 
+export async function replaceKnownLearnWord(
+  supabase: SupabaseClient,
+  userId: string,
+  sessionId: string,
+  sessionWordId: string,
+): Promise<SessionView> {
+  const session = await getSessionById(supabase, userId, sessionId);
+
+  if (session.session_type !== "daily" || session.phase !== "learn") {
+    throw new Error("Daily words can only be replaced during learning.");
+  }
+
+  const words = await getSessionWords(supabase, userId, session.id);
+  const learnWords = getLearnWords(words);
+  const activeWord = learnWords[session.learn_index];
+
+  if (!activeWord || activeWord.id !== sessionWordId) {
+    throw new Error("This word is no longer the active learn card.");
+  }
+
+  const replacementWord = await getNextReplacementWord(
+    supabase,
+    userId,
+    words,
+  );
+
+  if (!replacementWord) {
+    throw new Error("No replacement words are available.");
+  }
+
+  const { error } = await supabase
+    .from("study_session_words")
+    .update({
+      correct_count: 0,
+      guessed_count: 0,
+      last_attempted_at: null,
+      last_question_type: null,
+      miss_count: 0,
+      satisfied_meaning_recognition: false,
+      satisfied_reverse_recall: false,
+      satisfied_sat_usage: false,
+      source: "new",
+      status: "new",
+      vocab_word_id: replacementWord.id,
+    })
+    .eq("id", activeWord.id)
+    .eq("session_id", session.id)
+    .eq("user_id", userId);
+
+  assertNoError(error, "Unable to replace the word");
+
+  await markWordAlreadyKnown(supabase, userId, activeWord.vocab_word_id);
+  await markWordsSeen(supabase, userId, [
+    {
+      masteryStatus: null,
+      source: "new",
+      word: replacementWord,
+    },
+  ]);
+
+  return getSessionView(supabase, userId);
+}
+
 export async function submitAnswer(
   supabase: SupabaseClient,
   userId: string,
@@ -1286,6 +1349,55 @@ async function selectWordsForToday(
   return Array.from(selected.values());
 }
 
+async function getNextReplacementWord(
+  supabase: SupabaseClient,
+  userId: string,
+  sessionWords: SessionWordWithWord[],
+): Promise<VocabWord | null> {
+  const [
+    { data: masteryData, error: masteryError },
+    { data: wordData, error: wordError },
+  ] = await Promise.all([
+    supabase
+      .from("user_word_mastery")
+      .select("vocab_word_id")
+      .eq("user_id", userId),
+    supabase
+      .from("vocab_words")
+      .select("id, word, fast_meaning, example_sentence, sort_order")
+      .order("sort_order", { ascending: true }),
+  ]);
+
+  assertNoError(masteryError, "Unable to load prior word mastery");
+  assertNoError(wordError, "Unable to load vocabulary words");
+
+  const words = (wordData ?? []) as VocabWord[];
+  const sessionWordIds = new Set(
+    sessionWords.map((word) => word.vocab_word_id),
+  );
+  const seenWordIds = new Set(
+    ((masteryData ?? []) as Array<{ vocab_word_id: number }>).map(
+      (row) => row.vocab_word_id,
+    ),
+  );
+  const wordOrderRankById = new Map<number, number>(
+    words.map((word): [number, number] => [
+      word.id,
+      getUserWordOrderRank(userId, word),
+    ]),
+  );
+
+  return (
+    [...words]
+      .sort((first, second) =>
+        compareWordsByUserOrder(first, second, wordOrderRankById),
+      )
+      .find(
+        (word) => !sessionWordIds.has(word.id) && !seenWordIds.has(word.id),
+      ) ?? null
+  );
+}
+
 async function selectWordsForForeverReview(
   supabase: SupabaseClient,
   userId: string,
@@ -1776,6 +1888,18 @@ async function updateMasteryAfterAttempt(
     );
 
   assertNoError(upsertError, "Unable to update word mastery");
+}
+
+async function markWordAlreadyKnown(
+  supabase: SupabaseClient,
+  userId: string,
+  vocabWordId: number,
+) {
+  await updateMasteryAfterAttempt(supabase, userId, vocabWordId, {
+    guessed: false,
+    isCorrect: true,
+    isRecallReady: true,
+  });
 }
 
 async function touchMasterySeen(

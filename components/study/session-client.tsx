@@ -19,6 +19,7 @@ import {
   getCurrentUser,
   getSessionView,
   recordGuess,
+  replaceKnownLearnWord,
   resetTodaySession,
   submitAnswer,
 } from "@/lib/study/client-session";
@@ -165,6 +166,35 @@ export function SessionClient() {
         caughtError instanceof Error
           ? caughtError.message
           : "Unable to save progress.",
+      );
+      await refreshView();
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  const handleReplaceKnownWord = async () => {
+    if (!user || !view || view.screen !== "learn") {
+      return;
+    }
+
+    setError(null);
+    setIsPending(true);
+
+    try {
+      setView(
+        await replaceKnownLearnWord(
+          supabase,
+          user.id,
+          view.session.id,
+          view.currentWord.id,
+        ),
+      );
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to replace the word.",
       );
       await refreshView();
     } finally {
@@ -348,6 +378,7 @@ export function SessionClient() {
             <LearnScreen
               isPending={isPending}
               onContinue={handleLearnContinue}
+              onReplaceKnown={handleReplaceKnownWord}
               view={view}
             />
           ) : null}
