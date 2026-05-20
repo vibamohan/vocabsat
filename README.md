@@ -59,7 +59,8 @@ npm run seed:build
 
 - `vocab_words`: seeded SAT word bank. `example_sentence` may contain multiple
   examples separated by `|`; the app parses them before display.
-- `study_sessions`: one user-owned session per study date.
+- `study_sessions`: user-owned session state per study date and session type
+  (`daily` or `forever_review`).
 - `study_session_words`: per-session word status and satisfied question types.
 - `study_question_attempts`: immutable answer history.
 - `user_word_mastery`: cross-session weak/learning/ready state for future selection.
@@ -70,9 +71,11 @@ and can only read/write their own study rows.
 ## App Flow
 
 - `/` redirects authenticated users to `/dashboard`, otherwise to `/auth/login`.
-- `/dashboard` shows the single Today Session card.
+- `/dashboard` shows Today first, with a secondary Forever Review card below it.
 - `/session` runs Learn, Practice, Correction, Guess Check, and Completion
   screens.
+- `/review` runs optional endless review for words the user has already seen,
+  with correction, guess check, and 10-question checkpoints.
 
 Auth and study mutations run through the browser Supabase client. RLS and table
 constraints are the guardrails; the MVP does not try to prevent users from
@@ -91,3 +94,5 @@ modifying their own study progress.
 - Session completes when all words are recall-ready or the 45-question cap is
   reached.
 - Refreshing `/dashboard` or `/session` continues the current day's session.
+- Forever Review uses only previously seen words and shows a checkpoint every 10
+  questions.

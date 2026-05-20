@@ -18,6 +18,8 @@ export type UserWordStatus = "learning" | "weak" | "recall_ready";
 
 export type SessionWordSource = "new" | "review";
 
+export type StudySessionType = "daily" | "forever_review";
+
 export type VocabWord = {
   id: number;
   word: string;
@@ -30,6 +32,7 @@ export type StudySession = {
   id: string;
   user_id: string;
   study_date: string;
+  session_type: StudySessionType;
   phase: StudySessionPhase;
   daily_word_count: number;
   question_cap: number;
@@ -112,6 +115,14 @@ export type TodaySessionSummary =
       weakDueCount: number;
     };
 
+export type ForeverReviewSummary = {
+  dueCount: number;
+  eligibleWordCount: number;
+  staleCount: number;
+  studyDate: string;
+  weakCount: number;
+};
+
 export type SessionStats = {
   extraReviewCount: number;
   learnedCount: number;
@@ -148,6 +159,25 @@ export type SessionView =
       words: SessionWordWithWord[];
       stats: SessionStats;
     };
+
+export type ForeverReviewCheckpoint = {
+  correctCount: number;
+  questionsAnswered: number;
+  strengthenedCount: number;
+  weakWordsFound: number;
+};
+
+export type ForeverReviewView = {
+  checkpoint: ForeverReviewCheckpoint;
+  mode: "forever_review";
+  optionWords: VocabWord[];
+  question: StudyQuestion;
+  readyCount: number;
+  screen: "question";
+  session: StudySession;
+  totalWords: number;
+  words: SessionWordWithWord[];
+};
 
 export type PendingGuess = {
   attemptId: string;

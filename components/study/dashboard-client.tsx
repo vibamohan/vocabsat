@@ -3,16 +3,18 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { ForeverReviewCard } from "@/components/study/forever-review-card";
 import { StudyAppShell } from "@/components/study/app-shell";
 import { TodaySessionCard } from "@/components/study/today-session-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   getCurrentUser,
+  getForeverReviewSummary,
   getTodaySessionSummary,
   resetTodaySession,
   startOrContinueTodaySession,
 } from "@/lib/study/client-session";
-import type { TodaySessionSummary } from "@/lib/study/types";
+import type { ForeverReviewSummary, TodaySessionSummary } from "@/lib/study/types";
 import { createClient } from "@/lib/supabase/client";
 
 export function DashboardClient() {
@@ -21,7 +23,10 @@ export function DashboardClient() {
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isReviewBusy, setIsReviewBusy] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+  const [reviewSummary, setReviewSummary] =
+    useState<ForeverReviewSummary | null>(null);
   const [summary, setSummary] = useState<TodaySessionSummary | null>(null);
   const [user, setUser] = useState<{ email?: string | null; id: string } | null>(
     null,
@@ -40,7 +45,14 @@ export function DashboardClient() {
       }
 
       setUser(currentUser);
-      setSummary(await getTodaySessionSummary(supabase, currentUser.id));
+
+      const [todaySummary, foreverReviewSummary] = await Promise.all([
+        getTodaySessionSummary(supabase, currentUser.id),
+        getForeverReviewSummary(supabase, currentUser.id),
+      ]);
+
+      setSummary(todaySummary);
+      setReviewSummary(foreverReviewSummary);
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -75,6 +87,12 @@ export function DashboardClient() {
       );
       setIsBusy(false);
     }
+  };
+
+  const handleStartReview = () => {
+    setError(null);
+    setIsReviewBusy(true);
+    router.push("/review");
   };
 
   const handleReset = async () => {
@@ -114,16 +132,26 @@ export function DashboardClient() {
           <p className="max-w-xl text-sm text-destructive">{error}</p>
         ) : null}
 
-        {isLoading || !summary ? (
-          <Skeleton className="h-56 max-w-xl" />
+        {isLoading || !summary || !reviewSummary ? (
+          <div className="flex flex-col gap-4">
+            <Skeleton className="h-56 max-w-xl" />
+            <Skeleton className="h-44 max-w-xl" />
+          </div>
         ) : (
-          <TodaySessionCard
-            isBusy={isBusy}
-            isResetting={isResetting}
-            onReset={summary.hasSession ? handleReset : undefined}
-            onStart={handleStart}
-            summary={summary}
-          />
+          <>
+            <TodaySessionCard
+              isBusy={isBusy}
+              isResetting={isResetting}
+              onReset={summary.hasSession ? handleReset : undefined}
+              onStart={handleStart}
+              summary={summary}
+            />
+            <ForeverReviewCard
+              isBusy={isReviewBusy}
+              onStart={handleStartReview}
+              summary={reviewSummary}
+            />
+          </>
         )}
       </section>
     </StudyAppShell>

@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  FOREVER_REVIEW_STALE_DAYS,
+  FOREVER_REVIEW_QUESTION_CAP,
   getDailyWordCount,
   MAX_DAILY_REVIEW_WORD_COUNT,
   QUESTION_CAP,
@@ -9,6 +11,7 @@ import {
 } from "@/lib/study/config";
 import { addDaysToStudyDate, getStudyDate } from "@/lib/study/dates";
 import {
+  buildNextForeverReviewQuestion,
   buildNextQuestion,
   getReadyCount,
   isQuestionTypeSatisfied,
@@ -17,6 +20,9 @@ import {
 import type {
   AnswerConfidence,
   DailyWordStatus,
+  ForeverReviewCheckpoint,
+  ForeverReviewSummary,
+  ForeverReviewView,
   LatestAttempt,
   PendingGuess,
   QuestionType,
@@ -25,6 +31,7 @@ import type {
   SessionView,
   SessionWordWithWord,
   StudySession,
+  StudySessionType,
   SubmitAnswerResult,
   TodaySessionSummary,
   UserWordStatus,
@@ -176,6 +183,7 @@ export async function startOrContinueTodaySession(
       daily_word_count: dailyWordCount,
       phase: "learn",
       question_cap: getQuestionCap(selectedWords.length),
+      session_type: "daily",
       study_date: studyDate,
       user_id: userId,
     })
@@ -304,6 +312,146 @@ export async function getSessionView(
   return buildSessionView(supabase, userId, session, words);
 }
 
+export async function getForeverReviewSummary(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<ForeverReviewSummary> {
+  const studyDate = getStudyDate();
+  const { data, error } = await supabase
+    .from("user_word_mastery")
+    .select(
+      "user_id, vocab_word_id, status, correct_count, miss_count, guessed_count, last_seen_at, last_ready_at, next_review_on, review_interval_days",
+    )
+    .eq("user_id", userId);
+
+  assertNoError(error, "Unable to load review words");
+
+  const masteryRows = (data ?? []) as MasteryRow[];
+
+  return {
+    dueCount: masteryRows.filter((row) => isDueForReview(row, studyDate)).length,
+    eligibleWordCount: masteryRows.length,
+    staleCount: masteryRows.filter((row) => isStaleForReview(row, studyDate))
+      .length,
+    studyDate,
+    weakCount: masteryRows.filter((row) => row.status === "weak").length,
+  };
+}
+
+export async function startForeverReviewSession(
+  supabase: SupabaseClient,
+  userId: string,
+) {
+  const studyDate = getStudyDate();
+  const existingSession = await getSessionForDate(
+    supabase,
+    userId,
+    studyDate,
+    "forever_review",
+  );
+
+  if (existingSession) {
+    const repairedSession =
+      existingSession.phase === "complete"
+        ? await reopenForeverReviewSession(supabase, userId, existingSession)
+        : existingSession;
+
+    await ensureForeverReviewHasWords(
+      supabase,
+      userId,
+      repairedSession,
+      studyDate,
+    );
+
+    return repairedSession;
+  }
+
+  const selectedWords = await selectWordsForForeverReview(
+    supabase,
+    userId,
+    studyDate,
+  );
+
+  if (selectedWords.length === 0) {
+    throw new Error("No previously learned words are available for review yet.");
+  }
+
+  const { data: insertedSession, error: sessionError } = await supabase
+    .from("study_sessions")
+    .insert({
+      daily_word_count: getDailyWordCount(),
+      phase: "practice",
+      question_cap: FOREVER_REVIEW_QUESTION_CAP,
+      session_type: "forever_review",
+      study_date: studyDate,
+      user_id: userId,
+    })
+    .select("*")
+    .single();
+
+  if (sessionError?.code === "23505") {
+    const racedSession = await getSessionForDate(
+      supabase,
+      userId,
+      studyDate,
+      "forever_review",
+    );
+
+    if (racedSession) {
+      await ensureForeverReviewHasWords(
+        supabase,
+        userId,
+        racedSession,
+        studyDate,
+      );
+
+      return racedSession;
+    }
+  }
+
+  const session = requireRow<StudySession>(
+    insertedSession,
+    sessionError,
+    "Unable to create the review session",
+  );
+
+  await insertForeverReviewWords(supabase, userId, session.id, selectedWords);
+
+  return session;
+}
+
+export async function getForeverReviewView(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<ForeverReviewView> {
+  const session = await startForeverReviewSession(supabase, userId);
+  const words = await getSessionWords(supabase, userId, session.id);
+  const latestAttempt = await getLatestAttempt(supabase, session.id);
+  const optionWords = await getQuestionOptionWords(supabase);
+  const question = buildNextForeverReviewQuestion(
+    session,
+    words,
+    latestAttempt,
+    optionWords,
+  );
+
+  if (!question) {
+    throw new Error("No previously learned words are available for review yet.");
+  }
+
+  return {
+    checkpoint: await getForeverReviewCheckpoint(supabase, userId, session, words),
+    mode: "forever_review",
+    optionWords,
+    question,
+    readyCount: getReadyCount(words),
+    screen: "question",
+    session,
+    totalWords: words.length,
+    words,
+  };
+}
+
 export async function advanceLearn(
   supabase: SupabaseClient,
   userId: string,
@@ -427,6 +575,102 @@ export async function submitAnswer(
   return { outcome: "continue" };
 }
 
+export async function submitForeverReviewAnswer(
+  supabase: SupabaseClient,
+  userId: string,
+  input: SubmitAnswerInput,
+): Promise<SubmitAnswerResult> {
+  const sessionWord = await getSessionWordById(
+    supabase,
+    userId,
+    input.sessionWordId,
+  );
+  const session = await getSessionById(supabase, userId, sessionWord.session_id);
+
+  if (session.session_type !== "forever_review") {
+    throw new Error("This answer does not belong to a review session.");
+  }
+
+  if (session.phase !== "practice") {
+    throw new Error("This review session is not ready for practice yet.");
+  }
+
+  const words = await getSessionWords(supabase, userId, session.id);
+  const latestAttempt = await getLatestAttempt(supabase, session.id);
+  const optionWords = await getQuestionOptionWords(supabase);
+  const currentQuestion = buildNextForeverReviewQuestion(
+    session,
+    words,
+    latestAttempt,
+    optionWords,
+  );
+
+  if (
+    !currentQuestion ||
+    currentQuestion.targetSessionWordId !== input.sessionWordId ||
+    currentQuestion.questionType !== input.questionType ||
+    !currentQuestion.options.some(
+      (option) => option.vocabWordId === input.selectedVocabWordId,
+    )
+  ) {
+    throw new Error("This answer no longer matches the active review question.");
+  }
+
+  const isCorrect = input.selectedVocabWordId === sessionWord.vocab_word_id;
+  const shouldAskGuess = isCorrect && input.questionType === "sat_usage";
+
+  const { data: insertedAttempt, error: attemptError } = await supabase
+    .from("study_question_attempts")
+    .insert({
+      id: input.attemptId,
+      confidence: isCorrect && !shouldAskGuess ? "known" : null,
+      is_correct: isCorrect,
+      question_type: input.questionType,
+      selected_vocab_word_id: input.selectedVocabWordId,
+      session_id: session.id,
+      session_word_id: sessionWord.id,
+      user_id: userId,
+      vocab_word_id: sessionWord.vocab_word_id,
+    })
+    .select("*")
+    .single();
+
+  const attempt = requireRow<AttemptRow>(
+    insertedAttempt,
+    attemptError,
+    "Unable to record the review answer",
+  );
+
+  await incrementSessionQuestionCount(supabase, userId, session);
+
+  if (!isCorrect) {
+    await markWordMissed(supabase, userId, sessionWord, input.questionType);
+
+    return {
+      outcome: "incorrect",
+      sessionWordId: sessionWord.id,
+    };
+  }
+
+  if (shouldAskGuess) {
+    await touchSessionWordAttempt(
+      supabase,
+      userId,
+      sessionWord,
+      input.questionType,
+    );
+
+    return {
+      outcome: "guess_check",
+      attemptId: attempt.id,
+    };
+  }
+
+  await creditKnownAnswer(supabase, userId, sessionWord, input.questionType);
+
+  return { outcome: "continue" };
+}
+
 export async function recordGuess(
   supabase: SupabaseClient,
   userId: string,
@@ -464,6 +708,49 @@ export async function recordGuess(
   }
 
   await reconcileCompletionAfterAttempt(supabase, userId, attempt.session_id);
+}
+
+export async function recordForeverReviewGuess(
+  supabase: SupabaseClient,
+  userId: string,
+  attemptId: string,
+  confidence: AnswerConfidence,
+) {
+  const attempt = await getAttemptById(supabase, userId, attemptId);
+
+  if (
+    !attempt.is_correct ||
+    attempt.question_type !== "sat_usage" ||
+    attempt.confidence
+  ) {
+    return;
+  }
+
+  const session = await getSessionById(supabase, userId, attempt.session_id);
+
+  if (session.session_type !== "forever_review") {
+    throw new Error("This guess check does not belong to a review session.");
+  }
+
+  const sessionWord = await getSessionWordById(
+    supabase,
+    userId,
+    attempt.session_word_id,
+  );
+
+  const { error: attemptError } = await supabase
+    .from("study_question_attempts")
+    .update({ confidence })
+    .eq("id", attempt.id)
+    .eq("user_id", userId);
+
+  assertNoError(attemptError, "Unable to save the review guess check");
+
+  if (confidence === "guessed") {
+    await markWordGuessed(supabase, userId, sessionWord, "sat_usage");
+  } else {
+    await creditKnownAnswer(supabase, userId, sessionWord, "sat_usage");
+  }
 }
 
 export async function resetTodaySession(
@@ -647,6 +934,117 @@ async function buildSessionView(
   };
 }
 
+async function ensureForeverReviewHasWords(
+  supabase: SupabaseClient,
+  userId: string,
+  session: StudySession,
+  studyDate: string,
+) {
+  const existingWords = await getSessionWords(supabase, userId, session.id);
+
+  if (existingWords.length > 0) {
+    return;
+  }
+
+  const selectedWords = await selectWordsForForeverReview(
+    supabase,
+    userId,
+    studyDate,
+  );
+
+  if (selectedWords.length === 0) {
+    throw new Error("No previously learned words are available for review yet.");
+  }
+
+  await insertForeverReviewWords(supabase, userId, session.id, selectedWords);
+}
+
+async function insertForeverReviewWords(
+  supabase: SupabaseClient,
+  userId: string,
+  sessionId: string,
+  selectedWords: SelectedSessionWord[],
+) {
+  const sessionWords = selectedWords.map((entry, index) => ({
+    ...getInitialForeverReviewWordState(entry),
+    position: index,
+    session_id: sessionId,
+    user_id: userId,
+    vocab_word_id: entry.word.id,
+  }));
+
+  const { error } = await supabase
+    .from("study_session_words")
+    .insert(sessionWords);
+
+  assertNoError(error, "Unable to attach review words");
+}
+
+async function reopenForeverReviewSession(
+  supabase: SupabaseClient,
+  userId: string,
+  session: StudySession,
+) {
+  const { data, error } = await supabase
+    .from("study_sessions")
+    .update({
+      completed_at: null,
+      completion_reason: null,
+      phase: "practice",
+    })
+    .eq("id", session.id)
+    .eq("user_id", userId)
+    .select("*")
+    .single();
+
+  return requireRow<StudySession>(
+    data,
+    error,
+    "Unable to reopen the review session",
+  );
+}
+
+async function getForeverReviewCheckpoint(
+  supabase: SupabaseClient,
+  userId: string,
+  session: StudySession,
+  words: SessionWordWithWord[],
+): Promise<ForeverReviewCheckpoint> {
+  const { data, error } = await supabase
+    .from("study_question_attempts")
+    .select("session_word_id, is_correct, confidence")
+    .eq("session_id", session.id)
+    .eq("user_id", userId);
+
+  assertNoError(error, "Unable to load review checkpoint stats");
+
+  const attempts = (data ?? []) as Array<{
+    session_word_id: string;
+    is_correct: boolean;
+    confidence: AnswerConfidence | null;
+  }>;
+  const weakWordIds = new Set<string>();
+
+  attempts.forEach((attempt) => {
+    if (!attempt.is_correct || attempt.confidence === "guessed") {
+      weakWordIds.add(attempt.session_word_id);
+    }
+  });
+
+  return {
+    correctCount: attempts.filter((attempt) => attempt.is_correct).length,
+    questionsAnswered: session.total_questions_answered,
+    strengthenedCount: words.filter(
+      (word) =>
+        word.correct_count > 0 &&
+        word.status === "recall_ready" &&
+        word.miss_count === 0 &&
+        word.guessed_count === 0,
+    ).length,
+    weakWordsFound: weakWordIds.size,
+  };
+}
+
 function getLearnWords(words: SessionWordWithWord[]) {
   return words.filter((word) => word.source === "new");
 }
@@ -655,12 +1053,14 @@ async function getSessionForDate(
   supabase: SupabaseClient,
   userId: string,
   studyDate: string,
+  sessionType: StudySessionType = "daily",
 ) {
   const { data, error } = await supabase
     .from("study_sessions")
     .select("*")
     .eq("user_id", userId)
     .eq("study_date", studyDate)
+    .eq("session_type", sessionType)
     .maybeSingle();
 
   assertNoError(error, "Unable to load today's session");
@@ -886,6 +1286,67 @@ async function selectWordsForToday(
   return Array.from(selected.values());
 }
 
+async function selectWordsForForeverReview(
+  supabase: SupabaseClient,
+  userId: string,
+  studyDate: string,
+): Promise<SelectedSessionWord[]> {
+  const [
+    { data: masteryData, error: masteryError },
+    { data: wordData, error: wordError },
+  ] = await Promise.all([
+    supabase
+      .from("user_word_mastery")
+      .select(
+        "user_id, vocab_word_id, status, correct_count, miss_count, guessed_count, last_seen_at, last_ready_at, next_review_on, review_interval_days",
+      )
+      .eq("user_id", userId),
+    supabase
+      .from("vocab_words")
+      .select("id, word, fast_meaning, example_sentence, sort_order")
+      .order("sort_order", { ascending: true }),
+  ]);
+
+  assertNoError(masteryError, "Unable to load review mastery");
+  assertNoError(wordError, "Unable to load vocabulary words");
+
+  const masteryRows = (masteryData ?? []) as MasteryRow[];
+  const words = (wordData ?? []) as VocabWord[];
+  const wordsById = new Map(words.map((word) => [word.id, word]));
+  const wordOrderRankById = new Map<number, number>(
+    words.map((word): [number, number] => [
+      word.id,
+      getUserWordOrderRank(userId, word),
+    ]),
+  );
+
+  return masteryRows
+    .filter((row) => wordsById.has(row.vocab_word_id))
+    .sort((first, second) => {
+      const firstScore = getForeverReviewMasteryPriority(first, studyDate);
+      const secondScore = getForeverReviewMasteryPriority(second, studyDate);
+
+      if (firstScore !== secondScore) {
+        return secondScore - firstScore;
+      }
+
+      const lastSeenComparison = (first.last_seen_at ?? "").localeCompare(
+        second.last_seen_at ?? "",
+      );
+
+      if (lastSeenComparison !== 0) {
+        return lastSeenComparison;
+      }
+
+      return compareMasteryRowsByUserOrder(first, second, wordOrderRankById);
+    })
+    .map((row) => ({
+      masteryStatus: row.status,
+      source: "review",
+      word: wordsById.get(row.vocab_word_id) as VocabWord,
+    }));
+}
+
 function getQuestionCap(wordCount: number) {
   return Math.max(QUESTION_CAP, wordCount * QUESTION_CAP_PER_WORD);
 }
@@ -918,6 +1379,18 @@ function getInitialSessionWordState(entry: SelectedSessionWord) {
   };
 }
 
+function getInitialForeverReviewWordState(entry: SelectedSessionWord) {
+  const isReady = entry.masteryStatus === "recall_ready";
+
+  return {
+    satisfied_meaning_recognition: isReady,
+    satisfied_reverse_recall: isReady,
+    satisfied_sat_usage: isReady,
+    source: "review" as const,
+    status: isReady ? ("recall_ready" as const) : ("shaky" as const),
+  };
+}
+
 function getSelectedSourceCount(
   selected: Map<number, SelectedSessionWord>,
   source: SessionWordSource,
@@ -947,6 +1420,38 @@ function getMasteryPriority(row: MasteryRow) {
   return (
     statusScore + row.miss_count * 8 + row.guessed_count * 6 - row.correct_count
   );
+}
+
+function getForeverReviewMasteryPriority(row: MasteryRow, studyDate: string) {
+  const statusScore =
+    row.status === "weak" ? 1000 : row.status === "learning" ? 520 : 80;
+  const guessedScore = row.guessed_count > 0 ? 780 : 0;
+  const dueScore = isDueForReview(row, studyDate) ? 620 : 0;
+  const staleScore = isStaleForReview(row, studyDate) ? 420 : 0;
+  const performanceScore =
+    row.miss_count * 18 + row.guessed_count * 12 - row.correct_count * 2;
+
+  return statusScore + guessedScore + dueScore + staleScore + performanceScore;
+}
+
+function isStaleForReview(row: MasteryRow, studyDate: string) {
+  if (!row.last_seen_at) {
+    return true;
+  }
+
+  return getStudyDateDistance(row.last_seen_at.slice(0, 10), studyDate) >=
+    FOREVER_REVIEW_STALE_DAYS;
+}
+
+function getStudyDateDistance(firstDate: string, secondDate: string) {
+  const firstTime = Date.parse(`${firstDate}T00:00:00.000Z`);
+  const secondTime = Date.parse(`${secondDate}T00:00:00.000Z`);
+
+  if (!Number.isFinite(firstTime) || !Number.isFinite(secondTime)) {
+    return 0;
+  }
+
+  return Math.floor((secondTime - firstTime) / 86_400_000);
 }
 
 function getUserWordOrderRank(userId: string, word: VocabWord) {
@@ -1155,6 +1660,7 @@ async function touchSessionWordAttempt(
     .eq("user_id", userId);
 
   assertNoError(error, "Unable to update the attempted word");
+  await touchMasterySeen(supabase, userId, word.vocab_word_id);
 }
 
 async function creditKnownAnswer(
@@ -1270,6 +1776,20 @@ async function updateMasteryAfterAttempt(
     );
 
   assertNoError(upsertError, "Unable to update word mastery");
+}
+
+async function touchMasterySeen(
+  supabase: SupabaseClient,
+  userId: string,
+  vocabWordId: number,
+) {
+  const { error } = await supabase
+    .from("user_word_mastery")
+    .update({ last_seen_at: new Date().toISOString() })
+    .eq("user_id", userId)
+    .eq("vocab_word_id", vocabWordId);
+
+  assertNoError(error, "Unable to update word last seen time");
 }
 
 function getNextReviewIntervalDays(

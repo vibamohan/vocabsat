@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Check, RotateCcw } from "lucide-react";
+import { ArrowRight, BookOpenCheck, Check, RotateCcw, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,9 @@ import { getPrimaryExampleSentence } from "@/lib/study/example-sentences";
 import { getQuestionTypeLabel } from "@/lib/study/questions";
 import type {
   AnswerConfidence,
+  ForeverReviewCheckpoint,
+  ForeverReviewSummary,
+  ForeverReviewView,
   PendingGuess,
   StudyQuestion,
   SessionView,
@@ -25,6 +28,7 @@ import type {
 type LearnView = Extract<SessionView, { screen: "learn" }>;
 type QuestionView = Extract<SessionView, { screen: "question" }>;
 type CompleteView = Extract<SessionView, { screen: "complete" }>;
+type QuestionScreenView = QuestionView | ForeverReviewView;
 
 const ANSWER_LETTERS = ["A", "B", "C", "D", "E", "F", "G"];
 
@@ -83,11 +87,13 @@ export function LearnScreen({
 export function QuestionScreen({
   isPending,
   onAnswer,
+  variant = "daily",
   view,
 }: {
   isPending?: boolean;
   onAnswer: (question: StudyQuestion, selectedVocabWordId: number) => void;
-  view: QuestionView;
+  variant?: "daily" | "review";
+  view: QuestionScreenView;
 }) {
   const progress = Math.round((view.readyCount / view.totalWords) * 100);
 
@@ -95,20 +101,33 @@ export function QuestionScreen({
     <Card className="w-full max-w-3xl">
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <Badge variant="secondary">
-            {view.readyCount} of {view.totalWords} recall-ready
-          </Badge>
-          <Badge variant="outline">
-            {view.session.total_questions_answered} /{" "}
-            {view.session.question_cap} questions
-          </Badge>
+          {variant === "review" ? (
+            <>
+              <Badge variant="secondary">Forever Review</Badge>
+              <Badge variant="outline">
+                {view.session.total_questions_answered} questions
+              </Badge>
+            </>
+          ) : (
+            <>
+              <Badge variant="secondary">
+                {view.readyCount} of {view.totalWords} recall-ready
+              </Badge>
+              <Badge variant="outline">
+                {view.session.total_questions_answered} /{" "}
+                {view.session.question_cap} questions
+              </Badge>
+            </>
+          )}
         </div>
-        <div className="h-2 overflow-hidden rounded-full bg-muted">
-          <div
-            className="h-full rounded-full bg-primary"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
+        {variant === "daily" ? (
+          <div className="h-2 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-primary"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        ) : null}
         <p className="text-sm font-medium text-muted-foreground">
           {getQuestionTypeLabel(view.question.questionType)}
         </p>
@@ -135,6 +154,52 @@ export function QuestionScreen({
           ))}
         </div>
       </CardContent>
+    </Card>
+  );
+}
+
+export function ReviewStartScreen({
+  isPending,
+  onStart,
+  summary,
+}: {
+  isPending?: boolean;
+  onStart: () => void;
+  summary: ForeverReviewSummary;
+}) {
+  const hasWords = summary.eligibleWordCount > 0;
+
+  return (
+    <Card className="w-full max-w-2xl">
+      <CardHeader>
+        <Badge variant="secondary" className="w-fit">
+          Optional
+        </Badge>
+        <CardTitle>Forever Review</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <p className="leading-relaxed text-muted-foreground">
+          Practice words you&apos;ve already learned.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Badge variant="outline">{summary.eligibleWordCount} learned</Badge>
+          {summary.weakCount > 0 ? (
+            <Badge variant="outline">{summary.weakCount} weak</Badge>
+          ) : null}
+          {summary.dueCount > 0 ? (
+            <Badge variant="outline">{summary.dueCount} due</Badge>
+          ) : null}
+          {summary.staleCount > 0 ? (
+            <Badge variant="outline">{summary.staleCount} stale</Badge>
+          ) : null}
+        </div>
+      </CardContent>
+      <CardFooter>
+        <Button disabled={isPending || !hasWords} onClick={onStart} type="button">
+          <BookOpenCheck data-icon="inline-start" />
+          {isPending ? "Starting..." : "Start Review"}
+        </Button>
+      </CardFooter>
     </Card>
   );
 }
@@ -280,6 +345,54 @@ export function CompletionScreen({
         <Button onClick={onFinish} type="button">
           Finish
         </Button>
+      </CardFooter>
+    </Card>
+  );
+}
+
+export function ReviewCheckpointScreen({
+  checkpoint,
+  isPending,
+  onContinue,
+  onStop,
+}: {
+  checkpoint: ForeverReviewCheckpoint;
+  isPending?: boolean;
+  onContinue: () => void;
+  onStop: () => void;
+}) {
+  return (
+    <Card className="w-full max-w-2xl">
+      <CardHeader>
+        <Badge variant="secondary" className="w-fit">
+          Checkpoint
+        </Badge>
+        <CardTitle>Review checkpoint</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Stat label="questions answered" value={checkpoint.questionsAnswered} />
+          <Stat label="correct" value={checkpoint.correctCount} />
+          <Stat label="weak words found" value={checkpoint.weakWordsFound} />
+          <Stat label="word strengthened" value={checkpoint.strengthenedCount} />
+        </div>
+      </CardContent>
+      <CardFooter>
+        <div className="flex flex-wrap gap-3">
+          <Button disabled={isPending} onClick={onContinue} type="button">
+            <ArrowRight data-icon="inline-start" />
+            Keep Reviewing
+          </Button>
+          <Button
+            disabled={isPending}
+            onClick={onStop}
+            type="button"
+            variant="outline"
+          >
+            <X data-icon="inline-start" />
+            Stop
+          </Button>
+        </div>
       </CardFooter>
     </Card>
   );

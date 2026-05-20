@@ -116,6 +116,68 @@ export function buildNextQuestion(
   );
 }
 
+export function buildNextForeverReviewQuestion(
+  session: StudySession,
+  words: SessionWordWithWord[],
+  latestAttempt: LatestAttempt | null,
+  optionWords: VocabWord[] = words.map((word) => word.vocab_word),
+): StudyQuestion | null {
+  if (words.length === 0) {
+    return null;
+  }
+
+  const combinations = words.flatMap((word) =>
+    QUESTION_TYPES.map((questionType) => ({
+      word,
+      questionType,
+      score:
+        getForeverReviewWordPriority(word) +
+        getQuestionTypePriority(session, questionType),
+    })),
+  );
+
+  const rankedCombinations = combinations.sort((first, second) => {
+    const firstRepeatPenalty = getRepeatPenalty(first, latestAttempt);
+    const secondRepeatPenalty = getRepeatPenalty(second, latestAttempt);
+    const firstScore = first.score - firstRepeatPenalty;
+    const secondScore = second.score - secondRepeatPenalty;
+
+    if (firstScore !== secondScore) {
+      return secondScore - firstScore;
+    }
+
+    if (first.word.last_attempted_at !== second.word.last_attempted_at) {
+      if (!first.word.last_attempted_at) {
+        return -1;
+      }
+
+      if (!second.word.last_attempted_at) {
+        return 1;
+      }
+
+      return first.word.last_attempted_at.localeCompare(
+        second.word.last_attempted_at,
+      );
+    }
+
+    return first.word.position - second.word.position;
+  });
+
+  const selected = rankedCombinations[0];
+
+  if (!selected) {
+    return null;
+  }
+
+  return createQuestion(
+    selected.word,
+    selected.questionType,
+    words,
+    optionWords,
+    getQuestionSeed(session),
+  );
+}
+
 function getWordPriority(word: SessionWordWithWord) {
   const statusScore = {
     new: 45,
@@ -127,6 +189,21 @@ function getWordPriority(word: SessionWordWithWord) {
   const attemptScore =
     word.miss_count * 10 + word.guessed_count * 8 - word.correct_count * 2;
   const freshnessScore = word.last_attempted_at ? 0 : 8;
+
+  return statusScore + attemptScore + freshnessScore;
+}
+
+function getForeverReviewWordPriority(word: SessionWordWithWord) {
+  const statusScore = {
+    new: 45,
+    shaky: 110,
+    stable: 45,
+    recall_ready: 12,
+  }[word.status];
+
+  const attemptScore =
+    word.miss_count * 18 + word.guessed_count * 16 - word.correct_count * 2;
+  const freshnessScore = word.last_attempted_at ? 0 : 12;
 
   return statusScore + attemptScore + freshnessScore;
 }

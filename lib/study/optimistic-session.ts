@@ -1,4 +1,5 @@
 import {
+  buildNextForeverReviewQuestion,
   buildNextQuestion,
   getReadyCount,
   isQuestionTypeSatisfied,
@@ -8,6 +9,7 @@ import type {
   AnswerConfidence,
   CompletionReason,
   DailyWordStatus,
+  ForeverReviewView,
   LatestAttempt,
   PendingGuess,
   QuestionType,
@@ -22,6 +24,12 @@ type QuestionView = Extract<SessionView, { screen: "question" }>;
 
 export type OptimisticAnswerResult = {
   nextView: SessionView;
+  correctionWord?: SessionWordWithWord;
+  pendingGuess?: PendingGuess;
+};
+
+export type OptimisticForeverReviewAnswerResult = {
+  nextView: ForeverReviewView;
   correctionWord?: SessionWordWithWord;
   pendingGuess?: PendingGuess;
 };
@@ -125,6 +133,125 @@ export function applyOptimisticGuess(
   );
 }
 
+export function applyOptimisticForeverReviewAnswer(
+  view: ForeverReviewView,
+  question: StudyQuestion,
+  selectedVocabWordId: number,
+  attemptId: string,
+  answeredAt: string,
+): OptimisticForeverReviewAnswerResult {
+  const targetWord = view.words.find(
+    (word) => word.id === question.targetSessionWordId,
+  );
+
+  if (!targetWord) {
+    throw new Error("Unable to find the active word.");
+  }
+
+  const nextSession = incrementQuestionCount(view.session);
+  const latestAttempt = getLatestAttempt(question, answeredAt);
+  const isCorrect = selectedVocabWordId === question.targetVocabWordId;
+  const shouldAskGuess = isCorrect && question.questionType === "sat_usage";
+
+  if (!isCorrect) {
+    const { updatedWord, words } = updateWord(view.words, targetWord.id, (word) =>
+      markMissed(word, question.questionType, answeredAt),
+    );
+
+    return {
+      correctionWord: updatedWord,
+      nextView: buildForeverReviewView(
+        view,
+        nextSession,
+        words,
+        latestAttempt,
+        updateCheckpointAfterAnswer(view, targetWord, "incorrect"),
+      ),
+    };
+  }
+
+  if (shouldAskGuess) {
+    const { updatedWord, words } = updateWord(view.words, targetWord.id, (word) =>
+      touchAttempt(word, question.questionType, answeredAt),
+    );
+
+    return {
+      nextView: {
+        ...view,
+        checkpoint: updateCheckpointAfterAnswer(view, targetWord, "correct"),
+        session: nextSession,
+        words,
+      },
+      pendingGuess: {
+        attemptId,
+        sessionWordId: updatedWord.id,
+        word: updatedWord.vocab_word,
+      },
+    };
+  }
+
+  const { updatedWord, words } = updateWord(view.words, targetWord.id, (word) =>
+    creditKnown(word, question.questionType, answeredAt),
+  );
+
+  return {
+    nextView: buildForeverReviewView(
+      view,
+      nextSession,
+      words,
+      latestAttempt,
+      updateCheckpointAfterAnswer(
+        view,
+        targetWord,
+        "correct",
+        updatedWord.status === "recall_ready" &&
+          targetWord.status !== "recall_ready",
+      ),
+    ),
+  };
+}
+
+export function applyOptimisticForeverReviewGuess(
+  view: ForeverReviewView,
+  pendingGuess: PendingGuess,
+  confidence: AnswerConfidence,
+  guessedAt: string,
+): ForeverReviewView {
+  const targetWord = view.words.find(
+    (word) => word.id === pendingGuess.sessionWordId,
+  );
+
+  if (!targetWord) {
+    throw new Error("Unable to find the active word.");
+  }
+
+  const { updatedWord, words } = updateWord(
+    view.words,
+    pendingGuess.sessionWordId,
+    (word) =>
+      confidence === "guessed"
+        ? markGuessed(word, "sat_usage", guessedAt)
+        : creditKnown(word, "sat_usage", guessedAt),
+  );
+
+  return buildForeverReviewView(
+    view,
+    view.session,
+    words,
+    {
+      created_at: guessedAt,
+      question_type: "sat_usage",
+      session_word_id: pendingGuess.sessionWordId,
+    },
+    updateCheckpointAfterGuess(
+      view,
+      targetWord,
+      confidence,
+      updatedWord.status === "recall_ready" && targetWord.status !== "recall_ready",
+    ),
+  );
+}
+
 function incrementQuestionCount(session: StudySession): StudySession {
   return {
     ...session,
@@ -140,6 +267,35 @@ function getLatestAttempt(
     created_at: createdAt,
     question_type: question.questionType,
     session_word_id: question.targetSessionWordId,
+  };
+}
+
+function buildForeverReviewView(
+  view: ForeverReviewView,
+  session: StudySession,
+  words: SessionWordWithWord[],
+  latestAttempt: LatestAttempt,
+  checkpoint: ForeverReviewView["checkpoint"],
+): ForeverReviewView {
+  const question = buildNextForeverReviewQuestion(
+    session,
+    words,
+    latestAttempt,
+    view.optionWords,
+  );
+
+  if (!question) {
+    throw new Error("Unable to build the next review question.");
+  }
+
+  return {
+    ...view,
+    checkpoint,
+    question,
+    readyCount: getReadyCount(words),
+    session,
+    totalWords: words.length,
+    words,
   };
 }
 
@@ -188,6 +344,50 @@ function buildPracticeView(
     session,
     totalWords: words.length,
     words,
+  };
+}
+
+function updateCheckpointAfterAnswer(
+  view: ForeverReviewView,
+  targetWord: SessionWordWithWord,
+  outcome: "correct" | "incorrect",
+  strengthened = false,
+) {
+  const wasAlreadyWeak =
+    targetWord.miss_count > 0 ||
+    targetWord.guessed_count > 0 ||
+    targetWord.status === "shaky";
+
+  return {
+    correctCount:
+      view.checkpoint.correctCount + (outcome === "correct" ? 1 : 0),
+    questionsAnswered: view.checkpoint.questionsAnswered + 1,
+    strengthenedCount:
+      view.checkpoint.strengthenedCount + (strengthened ? 1 : 0),
+    weakWordsFound:
+      view.checkpoint.weakWordsFound +
+      (outcome === "incorrect" && !wasAlreadyWeak ? 1 : 0),
+  };
+}
+
+function updateCheckpointAfterGuess(
+  view: ForeverReviewView,
+  targetWord: SessionWordWithWord,
+  confidence: AnswerConfidence,
+  strengthened: boolean,
+) {
+  const wasAlreadyWeak =
+    targetWord.miss_count > 0 ||
+    targetWord.guessed_count > 0 ||
+    targetWord.status === "shaky";
+
+  return {
+    ...view.checkpoint,
+    strengthenedCount:
+      view.checkpoint.strengthenedCount + (strengthened ? 1 : 0),
+    weakWordsFound:
+      view.checkpoint.weakWordsFound +
+      (confidence === "guessed" && !wasAlreadyWeak ? 1 : 0),
   };
 }
 
@@ -250,20 +450,16 @@ function updateWord(
   sessionWordId: string,
   update: (word: SessionWordWithWord) => SessionWordWithWord,
 ) {
-  let updatedWord: SessionWordWithWord | null = null;
-  const nextWords = words.map((word) => {
-    if (word.id !== sessionWordId) {
-      return word;
-    }
+  const wordIndex = words.findIndex((word) => word.id === sessionWordId);
 
-    const nextWord = update(word);
-    updatedWord = nextWord;
-    return nextWord;
-  });
-
-  if (!updatedWord) {
+  if (wordIndex === -1) {
     throw new Error("Unable to find the active word.");
   }
+
+  const updatedWord = update(words[wordIndex]);
+  const nextWords = words.map((word, index) =>
+    index === wordIndex ? updatedWord : word,
+  );
 
   return { updatedWord, words: nextWords };
 }
