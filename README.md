@@ -57,7 +57,8 @@ npm run seed:build
 
 ## Data Model
 
-- `vocab_words`: seeded SAT word bank.
+- `vocab_words`: seeded SAT word bank. `example_sentence` may contain multiple
+  examples separated by `|`; the app parses them before display.
 - `study_sessions`: one user-owned session per study date.
 - `study_session_words`: per-session word status and satisfied question types.
 - `study_question_attempts`: immutable answer history.

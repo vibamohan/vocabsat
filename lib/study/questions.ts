@@ -7,6 +7,7 @@ import {
   type StudySession,
   type VocabWord,
 } from "@/lib/study/types";
+import { getExampleSentences } from "@/lib/study/example-sentences";
 
 const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
   meaning_recognition: "Meaning recognition",
@@ -111,7 +112,7 @@ export function buildNextQuestion(
     selected.questionType,
     words,
     optionWords,
-    session.total_questions_answered,
+    getQuestionSeed(session),
   );
 }
 
@@ -203,7 +204,11 @@ function createQuestion(
     prompt: blankExampleSentence(
       target.vocab_word.word,
       target.vocab_word.fast_meaning,
-      target.vocab_word.example_sentence,
+      getExampleSentenceForQuestion(
+        target.vocab_word.word,
+        target.vocab_word.example_sentence,
+        stableRank(target.vocab_word_id, seed + 31),
+      ),
     ),
     helperText: "Choose the word that best completes the sentence.",
     options,
@@ -252,7 +257,7 @@ function blankExampleSentence(
   fastMeaning: string,
   exampleSentence: string,
 ) {
-  const pattern = new RegExp(`\\b${escapeRegExp(word)}\\b`, "i");
+  const pattern = getWordPattern(word);
   const blankedSentence = exampleSentence.replace(pattern, "______");
 
   if (blankedSentence !== exampleSentence) {
@@ -262,12 +267,43 @@ function blankExampleSentence(
   return `The sentence calls for a word meaning "${fastMeaning}": ______.`;
 }
 
+function getExampleSentenceForQuestion(
+  word: string,
+  exampleSentence: string,
+  seed: number,
+) {
+  const examples = getExampleSentences(exampleSentence);
+  const pattern = getWordPattern(word);
+  const blankableExamples = examples.filter((example) => pattern.test(example));
+  const choices = blankableExamples.length > 0 ? blankableExamples : examples;
+
+  return choices[Math.abs(seed) % choices.length] ?? "";
+}
+
 function stableRank(value: number, seed: number) {
   return (value * 1103515245 + seed * 12345) % 2147483647;
 }
 
+function getQuestionSeed(session: StudySession) {
+  return getStringSeed(session.id) + session.total_questions_answered;
+}
+
+function getStringSeed(value: string) {
+  let seed = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    seed = (seed * 31 + value.charCodeAt(index)) % 2147483647;
+  }
+
+  return seed;
+}
+
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getWordPattern(word: string) {
+  return new RegExp(`\\b${escapeRegExp(word)}\\b`, "i");
 }
 
 function capitalize(value: string) {

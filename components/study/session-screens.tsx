@@ -12,6 +12,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { getPrimaryExampleSentence } from "@/lib/study/example-sentences";
 import { getQuestionTypeLabel } from "@/lib/study/questions";
 import type {
   AnswerConfidence,
@@ -63,7 +64,9 @@ export function LearnScreen({
             Example
           </p>
           <p className="leading-relaxed text-muted-foreground">
-            {view.currentWord.vocab_word.example_sentence}
+            {getPrimaryExampleSentence(
+              view.currentWord.vocab_word.example_sentence,
+            )}
           </p>
         </div>
       </CardContent>
@@ -163,7 +166,7 @@ export function CorrectionScreen({
         </div>
         <Separator />
         <p className="leading-relaxed text-muted-foreground">
-          {word.vocab_word.example_sentence}
+          {getPrimaryExampleSentence(word.vocab_word.example_sentence)}
         </p>
       </CardContent>
       <CardFooter>

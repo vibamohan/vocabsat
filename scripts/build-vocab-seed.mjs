@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const root = process.cwd();
@@ -97,4 +97,5 @@ set
   source = 'sat_300_plus_vocab_dataset';
 `;
 
+await mkdir(path.dirname(outputPath), { recursive: true });
 await writeFile(outputPath, sql);
