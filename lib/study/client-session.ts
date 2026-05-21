@@ -13,14 +13,15 @@ import { addDaysToStudyDate, getStudyDate } from "@/lib/study/dates";
 import {
   buildNextForeverReviewQuestion,
   buildNextQuestion,
+  gradeTypedAnswer,
   getReadyCount,
-  isQuestionTypeSatisfied,
   isRecallReady,
 } from "@/lib/study/questions";
 import { getStudyProgress } from "@/lib/study/progress";
 import type {
   AnswerConfidence,
   DailyWordStatus,
+  DefinitionSelfGrade,
   ForeverReviewCheckpoint,
   ForeverReviewSummary,
   ForeverReviewView,
@@ -31,6 +32,7 @@ import type {
   SessionStats,
   SessionView,
   SessionWordWithWord,
+  StudyQuestion,
   StudySession,
   StudySessionType,
   SubmitAnswerResult,
@@ -62,18 +64,32 @@ type AttemptRow = {
   user_id: string;
   vocab_word_id: number;
   question_type: QuestionType;
-  selected_vocab_word_id: number;
+  answer_mode: "multiple_choice" | "typed";
+  selected_vocab_word_id: number | null;
+  typed_answer: string | null;
   is_correct: boolean;
   confidence: AnswerConfidence | null;
   created_at: string;
 };
 
-type SubmitAnswerInput = {
+type SubmitMultipleChoiceAnswerInput = {
   attemptId: string;
   sessionWordId: string;
   questionType: QuestionType;
   selectedVocabWordId: number;
 };
+
+type SubmitTypedAnswerInput = {
+  attemptId: string;
+  sessionWordId: string;
+  questionType: QuestionType;
+  typedAnswer: string;
+  selfGrade?: DefinitionSelfGrade;
+};
+
+type SubmitAnswerInput =
+  | SubmitMultipleChoiceAnswerInput
+  | SubmitTypedAnswerInput;
 
 type SelectedSessionWord = {
   word: VocabWord;
@@ -517,6 +533,8 @@ export async function replaceKnownLearnWord(
       satisfied_meaning_recognition: false,
       satisfied_reverse_recall: false,
       satisfied_sat_usage: false,
+      satisfied_definition_recall: false,
+      satisfied_word_recall: false,
       source: "new",
       status: "new",
       vocab_word_id: replacementWord.id,
@@ -569,33 +587,29 @@ export async function submitAnswer(
     optionWords,
   );
 
-  if (
-    !currentQuestion ||
-    currentQuestion.targetSessionWordId !== input.sessionWordId ||
-    currentQuestion.questionType !== input.questionType ||
-    !currentQuestion.options.some(
-      (option) => option.vocabWordId === input.selectedVocabWordId,
-    )
-  ) {
+  if (!doesSubmittedAnswerMatchQuestion(currentQuestion, input)) {
     throw new Error("This answer no longer matches the active question.");
   }
 
-  const isCorrect = input.selectedVocabWordId === sessionWord.vocab_word_id;
+  const answer = getSubmittedAnswer(input, sessionWord);
   const shouldAskGuess =
-    isCorrect &&
+    answer.isCorrect &&
+    answer.answerMode === "multiple_choice" &&
     input.questionType === "sat_usage" &&
     !sessionWord.satisfied_sat_usage;
 
   const { data: insertedAttempt, error: attemptError } = await supabase
     .from("study_question_attempts")
     .insert({
+      answer_mode: answer.answerMode,
       id: input.attemptId,
-      confidence: isCorrect && !shouldAskGuess ? "known" : null,
-      is_correct: isCorrect,
+      confidence: answer.isCorrect && !shouldAskGuess ? "known" : null,
+      is_correct: answer.isCorrect,
       question_type: input.questionType,
-      selected_vocab_word_id: input.selectedVocabWordId,
+      selected_vocab_word_id: answer.selectedVocabWordId,
       session_id: session.id,
       session_word_id: sessionWord.id,
+      typed_answer: answer.typedAnswer,
       user_id: userId,
       vocab_word_id: sessionWord.vocab_word_id,
     })
@@ -610,7 +624,7 @@ export async function submitAnswer(
 
   await incrementSessionQuestionCount(supabase, userId, session);
 
-  if (!isCorrect) {
+  if (!answer.isCorrect) {
     await markWordMissed(supabase, userId, sessionWord, input.questionType);
     await reconcileCompletionAfterAttempt(supabase, userId, session.id);
 
@@ -670,30 +684,28 @@ export async function submitForeverReviewAnswer(
     optionWords,
   );
 
-  if (
-    !currentQuestion ||
-    currentQuestion.targetSessionWordId !== input.sessionWordId ||
-    currentQuestion.questionType !== input.questionType ||
-    !currentQuestion.options.some(
-      (option) => option.vocabWordId === input.selectedVocabWordId,
-    )
-  ) {
+  if (!doesSubmittedAnswerMatchQuestion(currentQuestion, input)) {
     throw new Error("This answer no longer matches the active review question.");
   }
 
-  const isCorrect = input.selectedVocabWordId === sessionWord.vocab_word_id;
-  const shouldAskGuess = isCorrect && input.questionType === "sat_usage";
+  const answer = getSubmittedAnswer(input, sessionWord);
+  const shouldAskGuess =
+    answer.isCorrect &&
+    answer.answerMode === "multiple_choice" &&
+    input.questionType === "sat_usage";
 
   const { data: insertedAttempt, error: attemptError } = await supabase
     .from("study_question_attempts")
     .insert({
+      answer_mode: answer.answerMode,
       id: input.attemptId,
-      confidence: isCorrect && !shouldAskGuess ? "known" : null,
-      is_correct: isCorrect,
+      confidence: answer.isCorrect && !shouldAskGuess ? "known" : null,
+      is_correct: answer.isCorrect,
       question_type: input.questionType,
-      selected_vocab_word_id: input.selectedVocabWordId,
+      selected_vocab_word_id: answer.selectedVocabWordId,
       session_id: session.id,
       session_word_id: sessionWord.id,
+      typed_answer: answer.typedAnswer,
       user_id: userId,
       vocab_word_id: sessionWord.vocab_word_id,
     })
@@ -708,7 +720,7 @@ export async function submitForeverReviewAnswer(
 
   await incrementSessionQuestionCount(supabase, userId, session);
 
-  if (!isCorrect) {
+  if (!answer.isCorrect) {
     await markWordMissed(supabase, userId, sessionWord, input.questionType);
 
     return {
@@ -734,6 +746,64 @@ export async function submitForeverReviewAnswer(
   await creditKnownAnswer(supabase, userId, sessionWord, input.questionType);
 
   return { outcome: "continue" };
+}
+
+function doesSubmittedAnswerMatchQuestion(
+  currentQuestion: StudyQuestion | null,
+  input: SubmitAnswerInput,
+) {
+  if (
+    !currentQuestion ||
+    currentQuestion.targetSessionWordId !== input.sessionWordId ||
+    currentQuestion.questionType !== input.questionType
+  ) {
+    return false;
+  }
+
+  if (isMultipleChoiceAnswer(input)) {
+    return (
+      currentQuestion.answerMode === "multiple_choice" &&
+      currentQuestion.options.some(
+        (option) => option.vocabWordId === input.selectedVocabWordId,
+      )
+    );
+  }
+
+  return currentQuestion.answerMode === "typed";
+}
+
+function getSubmittedAnswer(
+  input: SubmitAnswerInput,
+  sessionWord: SessionWordWithWord,
+) {
+  if (isMultipleChoiceAnswer(input)) {
+    return {
+      answerMode: "multiple_choice" as const,
+      isCorrect: input.selectedVocabWordId === sessionWord.vocab_word_id,
+      selectedVocabWordId: input.selectedVocabWordId,
+      typedAnswer: null,
+    };
+  }
+
+  return {
+    answerMode: "typed" as const,
+    isCorrect:
+      input.selfGrade === "correct" ||
+      (!input.selfGrade &&
+        gradeTypedAnswer(
+          input.questionType,
+          sessionWord.vocab_word,
+          input.typedAnswer,
+        ) === "correct"),
+    selectedVocabWordId: null,
+    typedAnswer: input.typedAnswer,
+  };
+}
+
+function isMultipleChoiceAnswer(
+  input: SubmitAnswerInput,
+): input is SubmitMultipleChoiceAnswerInput {
+  return "selectedVocabWordId" in input;
 }
 
 export async function recordGuess(
@@ -850,6 +920,8 @@ export async function resetTodaySession(
       satisfied_meaning_recognition: false,
       satisfied_reverse_recall: false,
       satisfied_sat_usage: false,
+      satisfied_definition_recall: false,
+      satisfied_word_recall: false,
       status: "new",
     })
     .eq("session_id", session.id)
@@ -1470,6 +1542,8 @@ function getInitialSessionWordState(entry: SelectedSessionWord) {
     satisfied_meaning_recognition: false,
     satisfied_reverse_recall: false,
     satisfied_sat_usage: false,
+    satisfied_definition_recall: false,
+    satisfied_word_recall: false,
     source: entry.source,
     status: "new" as const,
   };
@@ -1500,6 +1574,8 @@ function getInitialForeverReviewWordState(entry: SelectedSessionWord) {
     satisfied_meaning_recognition: isReady,
     satisfied_reverse_recall: isReady,
     satisfied_sat_usage: isReady,
+    satisfied_definition_recall: isReady,
+    satisfied_word_recall: isReady,
     source: "review" as const,
     status: isReady ? ("recall_ready" as const) : ("shaky" as const),
   };
@@ -1819,15 +1895,19 @@ function getSatisfiedUpdate(questionType: QuestionType) {
     return { satisfied_reverse_recall: true };
   }
 
-  return { satisfied_sat_usage: true };
+  if (questionType === "sat_usage") {
+    return { satisfied_sat_usage: true };
+  }
+
+  if (questionType === "word_recall") {
+    return { satisfied_word_recall: true };
+  }
+
+  return { satisfied_definition_recall: true };
 }
 
 function getNextKnownStatus(word: SessionWordWithWord): DailyWordStatus {
-  if (
-    isQuestionTypeSatisfied(word, "meaning_recognition") &&
-    isQuestionTypeSatisfied(word, "reverse_recall") &&
-    isQuestionTypeSatisfied(word, "sat_usage")
-  ) {
+  if (isRecallReady(word)) {
     return "recall_ready";
   }
 

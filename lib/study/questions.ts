@@ -5,18 +5,47 @@ import {
   type SessionWordWithWord,
   type StudyQuestion,
   type StudySession,
+  type TypedAnswerGrade,
   type VocabWord,
 } from "@/lib/study/types";
 import { getExampleSentences } from "@/lib/study/example-sentences";
 
 const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
+  definition_recall: "Definition recall",
   meaning_recognition: "Meaning recognition",
   reverse_recall: "Reverse recall",
   sat_usage: "SAT-style usage",
+  word_recall: "Word recall",
 };
 
 export function getQuestionTypeLabel(questionType: QuestionType) {
   return QUESTION_TYPE_LABELS[questionType];
+}
+
+export function isMultipleChoiceQuestionType(questionType: QuestionType) {
+  return (
+    questionType === "meaning_recognition" ||
+    questionType === "reverse_recall" ||
+    questionType === "sat_usage"
+  );
+}
+
+export function gradeTypedAnswer(
+  questionType: QuestionType,
+  word: VocabWord,
+  typedAnswer: string,
+): TypedAnswerGrade {
+  if (questionType === "word_recall") {
+    return normalizeWordAnswer(typedAnswer) === normalizeWordAnswer(word.word)
+      ? "correct"
+      : "incorrect";
+  }
+
+  if (questionType !== "definition_recall") {
+    return "incorrect";
+  }
+
+  return gradeDefinitionAnswer(word.fast_meaning, typedAnswer);
 }
 
 export function getReadyCount(words: SessionWordWithWord[]) {
@@ -41,7 +70,15 @@ export function isQuestionTypeSatisfied(
     return word.satisfied_reverse_recall;
   }
 
-  return word.satisfied_sat_usage;
+  if (questionType === "sat_usage") {
+    return word.satisfied_sat_usage;
+  }
+
+  if (questionType === "word_recall") {
+    return word.satisfied_word_recall;
+  }
+
+  return word.satisfied_definition_recall;
 }
 
 export function isRecallReady(word: SessionWordWithWord) {
@@ -63,18 +100,27 @@ export function buildNextQuestion(
   }
 
   const combinations = candidates.flatMap((word) => {
-    const unsatisfiedTypes = QUESTION_TYPES.filter(
-      (questionType) => !isQuestionTypeSatisfied(word, questionType),
-    );
+    const questionType = getNextUnsatisfiedQuestionType(word);
 
-    return unsatisfiedTypes.map((questionType) => ({
-      word,
-      questionType,
-      score: getWordPriority(word) + getQuestionTypePriority(session, questionType),
-    }));
+    return questionType
+      ? [
+          {
+            word,
+            questionType,
+            score: getWordPriority(word) + getStagePriority(questionType),
+          },
+        ]
+      : [];
   });
 
   const rankedCombinations = combinations.sort((first, second) => {
+    const firstBlocked = isSpacingBlocked(first.word, latestAttempt);
+    const secondBlocked = isSpacingBlocked(second.word, latestAttempt);
+
+    if (firstBlocked !== secondBlocked) {
+      return firstBlocked ? 1 : -1;
+    }
+
     const firstRepeatPenalty = getRepeatPenalty(first, latestAttempt);
     const secondRepeatPenalty = getRepeatPenalty(second, latestAttempt);
     const firstScore = first.score - firstRepeatPenalty;
@@ -126,17 +172,26 @@ export function buildNextForeverReviewQuestion(
     return null;
   }
 
-  const combinations = words.flatMap((word) =>
-    QUESTION_TYPES.map((questionType) => ({
+  const combinations = words.map((word) => {
+    const questionType =
+      getNextUnsatisfiedQuestionType(word) ??
+      getReviewQuestionType(session, word);
+
+    return {
       word,
       questionType,
-      score:
-        getForeverReviewWordPriority(word) +
-        getQuestionTypePriority(session, questionType),
-    })),
-  );
+      score: getForeverReviewWordPriority(word) + getStagePriority(questionType),
+    };
+  });
 
   const rankedCombinations = combinations.sort((first, second) => {
+    const firstBlocked = isSpacingBlocked(first.word, latestAttempt);
+    const secondBlocked = isSpacingBlocked(second.word, latestAttempt);
+
+    if (firstBlocked !== secondBlocked) {
+      return firstBlocked ? 1 : -1;
+    }
+
     const firstRepeatPenalty = getRepeatPenalty(first, latestAttempt);
     const secondRepeatPenalty = getRepeatPenalty(second, latestAttempt);
     const firstScore = first.score - firstRepeatPenalty;
@@ -208,17 +263,30 @@ function getForeverReviewWordPriority(word: SessionWordWithWord) {
   return statusScore + attemptScore + freshnessScore;
 }
 
-function getQuestionTypePriority(
-  session: StudySession,
-  questionType: QuestionType,
-) {
-  const rotationIndex = session.total_questions_answered % QUESTION_TYPES.length;
-  const questionTypeIndex = QUESTION_TYPES.indexOf(questionType);
-  const distance =
-    (questionTypeIndex - rotationIndex + QUESTION_TYPES.length) %
-    QUESTION_TYPES.length;
+function getNextUnsatisfiedQuestionType(word: SessionWordWithWord) {
+  return QUESTION_TYPES.find(
+    (questionType) => !isQuestionTypeSatisfied(word, questionType),
+  );
+}
 
-  return QUESTION_TYPES.length - distance;
+function getReviewQuestionType(
+  session: StudySession,
+  word: SessionWordWithWord,
+) {
+  const seed = session.total_questions_answered + word.position;
+  return QUESTION_TYPES[seed % QUESTION_TYPES.length];
+}
+
+function getStagePriority(questionType: QuestionType) {
+  const stageIndex = QUESTION_TYPES.indexOf(questionType);
+  return (QUESTION_TYPES.length - stageIndex) * 3;
+}
+
+function isSpacingBlocked(
+  word: SessionWordWithWord,
+  latestAttempt: LatestAttempt | null,
+) {
+  return latestAttempt?.session_word_id === word.id;
 }
 
 function getRepeatPenalty(
@@ -254,6 +322,7 @@ function createQuestion(
 
   if (questionType === "meaning_recognition") {
     return {
+      answerMode: "multiple_choice",
       questionType,
       targetSessionWordId: target.id,
       targetVocabWordId: target.vocab_word_id,
@@ -265,6 +334,7 @@ function createQuestion(
 
   if (questionType === "reverse_recall") {
     return {
+      answerMode: "multiple_choice",
       questionType,
       targetSessionWordId: target.id,
       targetVocabWordId: target.vocab_word_id,
@@ -274,21 +344,48 @@ function createQuestion(
     };
   }
 
+  const blankedPrompt = blankExampleSentence(
+    target.vocab_word.word,
+    target.vocab_word.fast_meaning,
+    getExampleSentenceForQuestion(
+      target.vocab_word.word,
+      target.vocab_word.example_sentence,
+      stableRank(target.vocab_word_id, seed + 31),
+    ),
+  );
+
+  if (questionType === "sat_usage") {
+    return {
+      answerMode: "multiple_choice",
+      questionType,
+      targetSessionWordId: target.id,
+      targetVocabWordId: target.vocab_word_id,
+      prompt: blankedPrompt,
+      helperText: "Choose the word that best completes the sentence.",
+      options,
+    };
+  }
+
+  if (questionType === "word_recall") {
+    return {
+      answerMode: "typed",
+      questionType,
+      targetSessionWordId: target.id,
+      targetVocabWordId: target.vocab_word_id,
+      prompt: blankedPrompt,
+      helperText: "Type the word that best completes the sentence.",
+      options: [],
+    };
+  }
+
   return {
+    answerMode: "typed",
     questionType,
     targetSessionWordId: target.id,
     targetVocabWordId: target.vocab_word_id,
-    prompt: blankExampleSentence(
-      target.vocab_word.word,
-      target.vocab_word.fast_meaning,
-      getExampleSentenceForQuestion(
-        target.vocab_word.word,
-        target.vocab_word.example_sentence,
-        stableRank(target.vocab_word_id, seed + 31),
-      ),
-    ),
-    helperText: "Choose the word that best completes the sentence.",
-    options,
+    prompt: `What does ${target.vocab_word.word} mean?`,
+    helperText: "Type a short meaning.",
+    options: [],
   };
 }
 
@@ -300,21 +397,29 @@ function getOptions(
   seed: number,
 ) {
   const sessionOptionWords = words.map((word) => word.vocab_word);
-  const optionsById = new Map<number, VocabWord>();
-
-  for (const word of [...sessionOptionWords, ...optionWords]) {
-    optionsById.set(word.id, word);
-  }
+  const studiedDistractors = sessionOptionWords
+    .filter((word) => word.id !== target.vocab_word_id)
+    .sort(
+      (first, second) =>
+        stableRank(first.id, seed) - stableRank(second.id, seed),
+    )
+    .slice(0, 2);
+  const studiedDistractorIds = new Set(studiedDistractors.map((word) => word.id));
+  const fallbackDistractors = optionWords
+    .filter(
+      (word) =>
+        word.id !== target.vocab_word_id && !studiedDistractorIds.has(word.id),
+    )
+    .sort(
+      (first, second) =>
+        stableRank(first.id, seed + 11) - stableRank(second.id, seed + 11),
+    )
+    .slice(0, 3 - studiedDistractors.length);
 
   const optionChoices = [
     target.vocab_word,
-    ...Array.from(optionsById.values())
-      .filter((word) => word.id !== target.vocab_word_id)
-      .sort(
-        (first, second) =>
-          stableRank(first.id, seed) - stableRank(second.id, seed),
-      )
-      .slice(0, 3),
+    ...studiedDistractors,
+    ...fallbackDistractors,
   ].sort(
     (first, second) =>
       stableRank(first.id, seed + 17) - stableRank(second.id, seed + 17),
@@ -358,7 +463,19 @@ function getExampleSentenceForQuestion(
 }
 
 function stableRank(value: number, seed: number) {
-  return (value * 1103515245 + seed * 12345) % 2147483647;
+  let hash = 2166136261;
+
+  hash ^= value;
+  hash = Math.imul(hash, 16777619);
+  hash ^= seed;
+  hash = Math.imul(hash, 16777619);
+  hash ^= hash >>> 16;
+  hash = Math.imul(hash, 2246822507);
+  hash ^= hash >>> 13;
+  hash = Math.imul(hash, 3266489909);
+  hash ^= hash >>> 16;
+
+  return hash >>> 0;
 }
 
 function getQuestionSeed(session: StudySession) {
@@ -385,4 +502,65 @@ function getWordPattern(word: string) {
 
 function capitalize(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function gradeDefinitionAnswer(
+  fastMeaning: string,
+  typedAnswer: string,
+): TypedAnswerGrade {
+  const meaningTokens = getMeaningTokens(fastMeaning);
+  const answerTokens = new Set(getMeaningTokens(typedAnswer));
+
+  if (meaningTokens.length === 0 || answerTokens.size === 0) {
+    return "incorrect";
+  }
+
+  const overlapCount = meaningTokens.filter((token) =>
+    answerTokens.has(token),
+  ).length;
+  const ratio = overlapCount / meaningTokens.length;
+
+  if (overlapCount >= Math.min(2, meaningTokens.length) && ratio >= 0.5) {
+    return "correct";
+  }
+
+  return overlapCount === 0 ? "incorrect" : "unsure";
+}
+
+function normalizeWordAnswer(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/['’]s\b/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .map((part) => part.replace(/s\b/, ""))
+    .join(" ");
+}
+
+function getMeaningTokens(value: string) {
+  const stopWords = new Set([
+    "a",
+    "an",
+    "and",
+    "be",
+    "by",
+    "for",
+    "in",
+    "is",
+    "of",
+    "or",
+    "the",
+    "to",
+    "with",
+    "without",
+  ]);
+
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token.length > 2 && !stopWords.has(token))
+    .map((token) => token.replace(/s\b/, ""));
 }

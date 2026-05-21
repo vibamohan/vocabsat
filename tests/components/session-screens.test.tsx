@@ -5,6 +5,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   CompletionScreen,
   CorrectionScreen,
+  DefinitionSelfCheckScreen,
   GuessCheckScreen,
   LearnScreen,
   QuestionScreen,
@@ -47,6 +48,7 @@ function questionView(): Extract<SessionView, { screen: "question" }> {
     },
   });
   const question: StudyQuestion = {
+    answerMode: "multiple_choice",
     helperText: "Choose the meaning.",
     options: [
       { label: "brief", vocabWordId: word.vocab_word_id },
@@ -132,6 +134,33 @@ describe("study session screens", () => {
     expect(screen.getByRole("button", { name: /brief/i })).toBeDisabled();
   });
 
+  test("submits a typed question answer", async () => {
+    const user = userEvent.setup();
+    const onTypedAnswer = vi.fn();
+    const view = {
+      ...questionView(),
+      question: {
+        ...questionView().question,
+        answerMode: "typed" as const,
+        options: [],
+        questionType: "word_recall" as const,
+      },
+    };
+
+    render(
+      <QuestionScreen
+        onAnswer={vi.fn()}
+        onTypedAnswer={onTypedAnswer}
+        view={view}
+      />,
+    );
+    await user.type(screen.getByRole("textbox"), "terse");
+    await user.click(screen.getByRole("button", { name: "Check answer" }));
+
+    expect(onTypedAnswer).toHaveBeenCalledWith(view.question, "terse");
+    expect(screen.getByRole("textbox")).toHaveValue("");
+  });
+
   test("starts forever review when learned words exist", async () => {
     const user = userEvent.setup();
     const onStart = vi.fn();
@@ -156,16 +185,62 @@ describe("study session screens", () => {
   test("continues from a correction screen", async () => {
     const user = userEvent.setup();
     const onContinue = vi.fn();
+    const word = sessionWord({ word: { fast_meaning: "brief", word: "terse" } });
 
     render(
       <CorrectionScreen
+        correction={{
+          answerMode: "multiple_choice",
+          questionType: "meaning_recognition",
+          targetWord: word,
+        }}
         onContinue={onContinue}
-        word={sessionWord({ word: { fast_meaning: "brief", word: "terse" } })}
       />,
     );
     await user.click(screen.getByRole("button", { name: "Continue" }));
 
     expect(onContinue).toHaveBeenCalledTimes(1);
+  });
+
+  test("shows selected distractor on a correction screen", () => {
+    const word = sessionWord({ word: { fast_meaning: "brief", word: "terse" } });
+    const selectedWord = sessionWord({
+      vocab_word_id: 2,
+      word: { fast_meaning: "detailed", id: 2, word: "verbose" },
+    }).vocab_word;
+
+    render(
+      <CorrectionScreen
+        correction={{
+          answerMode: "multiple_choice",
+          questionType: "meaning_recognition",
+          selectedWord,
+          targetWord: word,
+        }}
+        onContinue={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("You chose")).toBeInTheDocument();
+    expect(screen.getByText("Verbose")).toBeInTheDocument();
+    expect(screen.getByText("Correct answer")).toBeInTheDocument();
+    expect(screen.getAllByText("Terse").length).toBeGreaterThan(0);
+  });
+
+  test("self-grades a definition recall answer", async () => {
+    const user = userEvent.setup();
+    const onGrade = vi.fn();
+
+    render(
+      <DefinitionSelfCheckScreen
+        onGrade={onGrade}
+        typedAnswer="short"
+        word={sessionWord({ word: { fast_meaning: "brief", word: "terse" } })}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "I was right" }));
+
+    expect(onGrade).toHaveBeenCalledWith("correct");
   });
 
   test("records a known guess check", async () => {

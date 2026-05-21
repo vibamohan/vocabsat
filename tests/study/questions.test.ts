@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   buildNextForeverReviewQuestion,
   buildNextQuestion,
+  gradeTypedAnswer,
   getQuestionTypeLabel,
   getReadyCount,
   getSatisfiedTypes,
@@ -105,6 +106,45 @@ describe("daily question building", () => {
     expect(question?.prompt).toBe("The ______ reply ended the debate.");
   });
 
+  test("asks typed word recall after recognition stages are satisfied", () => {
+    const word = sessionWord({
+      satisfied_meaning_recognition: true,
+      satisfied_reverse_recall: true,
+      satisfied_sat_usage: true,
+      word: {
+        example_sentence: "The terse reply ended the debate.",
+        fast_meaning: "brief",
+        word: "terse",
+      },
+    });
+
+    const question = buildNextQuestion(studySession(), [word], null);
+
+    expect(question).toMatchObject({
+      answerMode: "typed",
+      questionType: "word_recall",
+      prompt: "The ______ reply ended the debate.",
+    });
+  });
+
+  test("asks typed definition recall after word recall is satisfied", () => {
+    const word = sessionWord({
+      satisfied_meaning_recognition: true,
+      satisfied_reverse_recall: true,
+      satisfied_sat_usage: true,
+      satisfied_word_recall: true,
+      word: { fast_meaning: "brief", word: "terse" },
+    });
+
+    const question = buildNextQuestion(studySession(), [word], null);
+
+    expect(question).toMatchObject({
+      answerMode: "typed",
+      questionType: "definition_recall",
+      prompt: "What does terse mean?",
+    });
+  });
+
   test("uses a fallback SAT usage prompt when the example cannot be blanked", () => {
     const word = sessionWord({
       satisfied_meaning_recognition: true,
@@ -176,6 +216,35 @@ describe("daily question building", () => {
     expect(question?.targetSessionWordId).toBe("second-word");
   });
 
+  test("spaces the next stage behind another eligible word", () => {
+    const latestAttempt: LatestAttempt = {
+      created_at: "2026-05-20T12:05:00.000Z",
+      question_type: "sat_usage",
+      session_word_id: "first-word",
+    };
+    const firstWord = sessionWord({
+      id: "first-word",
+      position: 0,
+      satisfied_meaning_recognition: true,
+      satisfied_reverse_recall: true,
+      satisfied_sat_usage: true,
+    });
+    const secondWord = sessionWord({
+      id: "second-word",
+      position: 1,
+      vocab_word_id: 2,
+      word: { id: 2 },
+    });
+
+    const question = buildNextQuestion(
+      studySession(),
+      [firstWord, secondWord],
+      latestAttempt,
+    );
+
+    expect(question?.targetSessionWordId).toBe("second-word");
+  });
+
   test("fills options with unique distractors", () => {
     const target = sessionWord({
       vocab_word_id: 1,
@@ -200,6 +269,104 @@ describe("daily question building", () => {
     expect(optionIds).toContain(1);
     expect(new Set(optionIds).size).toBe(optionIds?.length);
     expect(question?.options).toHaveLength(4);
+  });
+
+  test("includes studied words as distractors before fallback options", () => {
+    const target = sessionWord({
+      id: "target",
+      vocab_word_id: 1,
+      word: { id: 1, word: "target" },
+    });
+    const studiedSecond = sessionWord({
+      id: "studied-second",
+      position: 1,
+      vocab_word_id: 2,
+      word: { id: 2, word: "studied-second" },
+    });
+    const studiedThird = sessionWord({
+      id: "studied-third",
+      position: 2,
+      vocab_word_id: 3,
+      word: { id: 3, word: "studied-third" },
+    });
+    const question = buildNextQuestion(
+      studySession(),
+      [target, studiedSecond, studiedThird],
+      null,
+      [
+        vocabWord({ id: 4, word: "fallback-fourth" }),
+        vocabWord({ id: 5, word: "fallback-fifth" }),
+      ],
+    );
+    const optionIds = question?.options.map((option) => option.vocabWordId);
+
+    expect(optionIds).toContain(1);
+    expect(optionIds).toContain(2);
+    expect(optionIds).toContain(3);
+    expect(question?.options).toHaveLength(4);
+  });
+
+  test("varies the correct option position across deterministic seeds", () => {
+    const target = sessionWord({
+      vocab_word_id: 1,
+      word: { fast_meaning: "target meaning", id: 1, word: "target" },
+    });
+    const options = [
+      target.vocab_word,
+      vocabWord({ id: 2, word: "second" }),
+      vocabWord({ id: 3, word: "third" }),
+      vocabWord({ id: 4, word: "fourth" }),
+      vocabWord({ id: 5, word: "fifth" }),
+      vocabWord({ id: 6, word: "sixth" }),
+    ];
+    const correctPositions = new Set<number>();
+
+    for (let index = 0; index < 12; index += 1) {
+      const question = buildNextQuestion(
+        studySession({
+          id: `session-${index}`,
+          total_questions_answered: index,
+        }),
+        [target],
+        null,
+        options,
+      );
+
+      correctPositions.add(
+        question?.options.findIndex((option) => option.vocabWordId === 1) ?? -1,
+      );
+    }
+
+    expect(correctPositions.size).toBeGreaterThan(1);
+  });
+});
+
+describe("typed answer grading", () => {
+  test("normalizes exact word recall answers", () => {
+    expect(
+      gradeTypedAnswer(
+        "word_recall",
+        vocabWord({ word: "Terse" }),
+        " terse! ",
+      ),
+    ).toBe("correct");
+  });
+
+  test("grades definition recall with token overlap", () => {
+    expect(
+      gradeTypedAnswer(
+        "definition_recall",
+        vocabWord({ fast_meaning: "brief and clear" }),
+        "brief clear",
+      ),
+    ).toBe("correct");
+    expect(
+      gradeTypedAnswer(
+        "definition_recall",
+        vocabWord({ fast_meaning: "brief and clear" }),
+        "short",
+      ),
+    ).toBe("incorrect");
   });
 });
 

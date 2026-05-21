@@ -2,13 +2,15 @@ import {
   buildNextForeverReviewQuestion,
   buildNextQuestion,
   getReadyCount,
-  isQuestionTypeSatisfied,
+  gradeTypedAnswer,
   isRecallReady,
 } from "@/lib/study/questions";
 import type {
   AnswerConfidence,
+  CorrectionFeedback,
   CompletionReason,
   DailyWordStatus,
+  DefinitionSelfGrade,
   ForeverReviewView,
   LatestAttempt,
   PendingGuess,
@@ -24,13 +26,13 @@ type QuestionView = Extract<SessionView, { screen: "question" }>;
 
 export type OptimisticAnswerResult = {
   nextView: SessionView;
-  correctionWord?: SessionWordWithWord;
+  correction?: CorrectionFeedback;
   pendingGuess?: PendingGuess;
 };
 
 export type OptimisticForeverReviewAnswerResult = {
   nextView: ForeverReviewView;
-  correctionWord?: SessionWordWithWord;
+  correction?: CorrectionFeedback;
   pendingGuess?: PendingGuess;
 };
 
@@ -63,7 +65,12 @@ export function applyOptimisticAnswer(
     );
 
     return {
-      correctionWord: updatedWord,
+      correction: {
+        answerMode: "multiple_choice",
+        questionType: question.questionType,
+        selectedWord: getVocabWordById(view, selectedVocabWordId),
+        targetWord: updatedWord,
+      },
       nextView: buildPracticeView(
         nextSession,
         words,
@@ -90,6 +97,67 @@ export function applyOptimisticAnswer(
         sessionWordId: updatedWord.id,
         word: updatedWord.vocab_word,
       },
+    };
+  }
+
+  const { words } = updateWord(view.words, targetWord.id, (word) =>
+    creditKnown(word, question.questionType, answeredAt),
+  );
+
+  return {
+    nextView: buildPracticeView(
+      nextSession,
+      words,
+      latestAttempt,
+      answeredAt,
+      view.optionWords,
+    ),
+  };
+}
+
+export function applyOptimisticTypedAnswer(
+  view: QuestionView,
+  question: StudyQuestion,
+  typedAnswer: string,
+  answeredAt: string,
+  selfGrade?: DefinitionSelfGrade,
+): OptimisticAnswerResult {
+  const targetWord = view.words.find(
+    (word) => word.id === question.targetSessionWordId,
+  );
+
+  if (!targetWord) {
+    throw new Error("Unable to find the active word.");
+  }
+
+  const nextSession = incrementQuestionCount(view.session);
+  const latestAttempt = getLatestAttempt(question, answeredAt);
+  const isCorrect = isTypedAnswerCorrect(
+    question,
+    targetWord,
+    typedAnswer,
+    selfGrade,
+  );
+
+  if (!isCorrect) {
+    const { updatedWord, words } = updateWord(view.words, targetWord.id, (word) =>
+      markMissed(word, question.questionType, answeredAt),
+    );
+
+    return {
+      correction: {
+        answerMode: "typed",
+        questionType: question.questionType,
+        targetWord: updatedWord,
+        typedAnswer,
+      },
+      nextView: buildPracticeView(
+        nextSession,
+        words,
+        latestAttempt,
+        answeredAt,
+        view.optionWords,
+      ),
     };
   }
 
@@ -159,7 +227,12 @@ export function applyOptimisticForeverReviewAnswer(
     );
 
     return {
-      correctionWord: updatedWord,
+      correction: {
+        answerMode: "multiple_choice",
+        questionType: question.questionType,
+        selectedWord: getVocabWordById(view, selectedVocabWordId),
+        targetWord: updatedWord,
+      },
       nextView: buildForeverReviewView(
         view,
         nextSession,
@@ -187,6 +260,73 @@ export function applyOptimisticForeverReviewAnswer(
         sessionWordId: updatedWord.id,
         word: updatedWord.vocab_word,
       },
+    };
+  }
+
+  const { updatedWord, words } = updateWord(view.words, targetWord.id, (word) =>
+    creditKnown(word, question.questionType, answeredAt),
+  );
+
+  return {
+    nextView: buildForeverReviewView(
+      view,
+      nextSession,
+      words,
+      latestAttempt,
+      updateCheckpointAfterAnswer(
+        view,
+        targetWord,
+        "correct",
+        updatedWord.status === "recall_ready" &&
+          targetWord.status !== "recall_ready",
+      ),
+    ),
+  };
+}
+
+export function applyOptimisticForeverReviewTypedAnswer(
+  view: ForeverReviewView,
+  question: StudyQuestion,
+  typedAnswer: string,
+  answeredAt: string,
+  selfGrade?: DefinitionSelfGrade,
+): OptimisticForeverReviewAnswerResult {
+  const targetWord = view.words.find(
+    (word) => word.id === question.targetSessionWordId,
+  );
+
+  if (!targetWord) {
+    throw new Error("Unable to find the active word.");
+  }
+
+  const nextSession = incrementQuestionCount(view.session);
+  const latestAttempt = getLatestAttempt(question, answeredAt);
+  const isCorrect = isTypedAnswerCorrect(
+    question,
+    targetWord,
+    typedAnswer,
+    selfGrade,
+  );
+
+  if (!isCorrect) {
+    const { updatedWord, words } = updateWord(view.words, targetWord.id, (word) =>
+      markMissed(word, question.questionType, answeredAt),
+    );
+
+    return {
+      correction: {
+        answerMode: "typed",
+        questionType: question.questionType,
+        targetWord: updatedWord,
+        typedAnswer,
+      },
+      nextView: buildForeverReviewView(
+        view,
+        nextSession,
+        words,
+        latestAttempt,
+        updateCheckpointAfterAnswer(view, targetWord, "incorrect"),
+      ),
     };
   }
 
@@ -532,17 +672,52 @@ function getSatisfiedUpdate(questionType: QuestionType) {
     return { satisfied_reverse_recall: true };
   }
 
-  return { satisfied_sat_usage: true };
+  if (questionType === "sat_usage") {
+    return { satisfied_sat_usage: true };
+  }
+
+  if (questionType === "word_recall") {
+    return { satisfied_word_recall: true };
+  }
+
+  return { satisfied_definition_recall: true };
 }
 
 function getNextKnownStatus(word: SessionWordWithWord): DailyWordStatus {
   if (
-    isQuestionTypeSatisfied(word, "meaning_recognition") &&
-    isQuestionTypeSatisfied(word, "reverse_recall") &&
-    isQuestionTypeSatisfied(word, "sat_usage")
+    isRecallReady(word)
   ) {
     return "recall_ready";
   }
 
   return "stable";
+}
+
+function isTypedAnswerCorrect(
+  question: StudyQuestion,
+  targetWord: SessionWordWithWord,
+  typedAnswer: string,
+  selfGrade?: DefinitionSelfGrade,
+) {
+  if (selfGrade) {
+    return selfGrade === "correct";
+  }
+
+  return (
+    gradeTypedAnswer(
+      question.questionType,
+      targetWord.vocab_word,
+      typedAnswer,
+    ) === "correct"
+  );
+}
+
+function getVocabWordById(
+  view: QuestionView | ForeverReviewView,
+  vocabWordId: number,
+) {
+  return (
+    view.words.find((word) => word.vocab_word_id === vocabWordId)?.vocab_word ??
+    view.optionWords.find((word) => word.id === vocabWordId)
+  );
 }

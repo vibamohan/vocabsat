@@ -8,6 +8,7 @@ import { StudyAppShell } from "@/components/study/app-shell";
 import {
   CompletionScreen,
   CorrectionScreen,
+  DefinitionSelfCheckScreen,
   GuessCheckScreen,
   LearnScreen,
   QuestionScreen,
@@ -23,12 +24,16 @@ import {
   resetTodaySession,
   submitAnswer,
 } from "@/lib/study/client-session";
+import { gradeTypedAnswer } from "@/lib/study/questions";
 import {
   applyOptimisticAnswer,
+  applyOptimisticTypedAnswer,
   applyOptimisticGuess,
 } from "@/lib/study/optimistic-session";
 import type {
   AnswerConfidence,
+  CorrectionFeedback,
+  DefinitionSelfGrade,
   PendingGuess,
   SessionView,
   SessionWordWithWord,
@@ -38,7 +43,13 @@ import { createClient } from "@/lib/supabase/client";
 
 type SessionMode =
   | { type: "normal" }
-  | { type: "correction"; word: SessionWordWithWord }
+  | { type: "correction"; correction: CorrectionFeedback }
+  | {
+      type: "definition_check";
+      question: StudyQuestion;
+      typedAnswer: string;
+      word: SessionWordWithWord;
+    }
   | { type: "guess"; pendingGuess: PendingGuess };
 
 export function SessionClient() {
@@ -239,8 +250,8 @@ export function SessionClient() {
 
       setView(result.nextView);
 
-      if (result.correctionWord) {
-        setMode({ type: "correction", word: result.correctionWord });
+      if (result.correction) {
+        setMode({ type: "correction", correction: result.correction });
       } else if (result.pendingGuess) {
         setMode({ type: "guess", pendingGuess: result.pendingGuess });
       } else {
@@ -263,6 +274,106 @@ export function SessionClient() {
           questionType: question.questionType,
           selectedVocabWordId,
           sessionWordId: question.targetSessionWordId,
+        });
+      },
+      "Unable to save the answer.",
+    );
+  };
+
+  const handleTypedAnswer = (
+    question: StudyQuestion,
+    typedAnswer: string,
+  ) => {
+    if (!user || !view || view.screen !== "question") {
+      return;
+    }
+
+    const targetWord = view.words.find(
+      (word) => word.id === question.targetSessionWordId,
+    );
+
+    if (!targetWord) {
+      setError("Unable to find the active word.");
+      return;
+    }
+
+    if (
+      question.questionType === "definition_recall" &&
+      gradeTypedAnswer(question.questionType, targetWord.vocab_word, typedAnswer) !==
+        "correct"
+    ) {
+      setMode({
+        type: "definition_check",
+        question,
+        typedAnswer,
+        word: targetWord,
+      });
+      return;
+    }
+
+    submitTypedAnswer(question, typedAnswer);
+  };
+
+  const submitTypedAnswer = (
+    question: StudyQuestion,
+    typedAnswer: string,
+    selfGrade?: DefinitionSelfGrade,
+  ) => {
+    if (!user || !view || view.screen !== "question") {
+      return;
+    }
+
+    setError(null);
+
+    const questionKey = [
+      view.session.id,
+      view.session.total_questions_answered,
+      question.targetSessionWordId,
+      question.questionType,
+    ].join(":");
+
+    if (handledQuestionKeyRef.current === questionKey) {
+      return;
+    }
+
+    handledQuestionKeyRef.current = questionKey;
+
+    const attemptId = crypto.randomUUID();
+    const answeredAt = new Date().toISOString();
+
+    try {
+      const result = applyOptimisticTypedAnswer(
+        view,
+        question,
+        typedAnswer,
+        answeredAt,
+        selfGrade,
+      );
+
+      setView(result.nextView);
+      setMode(
+        result.correction
+          ? { type: "correction", correction: result.correction }
+          : { type: "normal" },
+      );
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to check the answer.",
+      );
+      handledQuestionKeyRef.current = null;
+      return;
+    }
+
+    enqueuePersistence(
+      async () => {
+        await submitAnswer(supabase, user.id, {
+          attemptId,
+          questionType: question.questionType,
+          selfGrade,
+          sessionWordId: question.targetSessionWordId,
+          typedAnswer,
         });
       },
       "Unable to save the answer.",
@@ -386,6 +497,7 @@ export function SessionClient() {
             <QuestionScreen
               isPending={isPending}
               onAnswer={handleAnswer}
+              onTypedAnswer={handleTypedAnswer}
               view={view}
             />
           ) : null}
@@ -400,6 +512,7 @@ export function SessionClient() {
 
       {!isLoading && mode.type === "correction" ? (
         <CorrectionScreen
+          correction={mode.correction}
           isPending={isPending}
           onContinue={handleCorrectionContinue}
           progressContext={
@@ -411,6 +524,25 @@ export function SessionClient() {
                 }
               : undefined
           }
+        />
+      ) : null}
+
+      {!isLoading && mode.type === "definition_check" ? (
+        <DefinitionSelfCheckScreen
+          isPending={isPending}
+          onGrade={(grade) =>
+            submitTypedAnswer(mode.question, mode.typedAnswer, grade)
+          }
+          progressContext={
+            view?.screen === "question"
+              ? {
+                  readyCount: view.readyCount,
+                  variant: "daily",
+                  words: view.words,
+                }
+              : undefined
+          }
+          typedAnswer={mode.typedAnswer}
           word={mode.word}
         />
       ) : null}

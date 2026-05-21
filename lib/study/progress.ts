@@ -48,6 +48,8 @@ function getCompletedUnits(word: SessionWordWithWord) {
     word.satisfied_meaning_recognition,
     word.satisfied_reverse_recall,
     word.satisfied_sat_usage,
+    word.satisfied_word_recall,
+    word.satisfied_definition_recall,
   ].filter(Boolean).length;
 }
 

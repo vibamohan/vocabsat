@@ -24,12 +24,12 @@ describe("study progress", () => {
     ]);
 
     expect(progress.completedUnits).toBe(2);
-    expect(progress.percent).toBe(67);
+    expect(progress.percent).toBe(40);
     expect(progress.wordProgress[0]).toMatchObject({
       completedUnits: 2,
       id: "word-1",
-      percent: 67,
-      totalUnits: 3,
+      percent: 40,
+      totalUnits: 5,
     });
   });
 
@@ -41,7 +41,7 @@ describe("study progress", () => {
       }),
     ]);
 
-    expect(progress.completedUnits).toBe(3);
+    expect(progress.completedUnits).toBe(5);
     expect(progress.percent).toBe(100);
   });
 
@@ -54,9 +54,9 @@ describe("study progress", () => {
       satisfiedWord({ id: "word-2", vocab_word_id: 2, word: { id: 2 } }),
     ]);
 
-    expect(progress.completedUnits).toBe(4);
-    expect(progress.totalUnits).toBe(6);
-    expect(progress.percent).toBe(67);
+    expect(progress.completedUnits).toBe(6);
+    expect(progress.totalUnits).toBe(10);
+    expect(progress.percent).toBe(60);
     expect(progress.totalWords).toBe(2);
   });
 });

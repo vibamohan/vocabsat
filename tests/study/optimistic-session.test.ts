@@ -25,6 +25,7 @@ function studyQuestion(
   },
 ): StudyQuestion {
   return {
+    answerMode: "multiple_choice",
     helperText: "Choose.",
     options: [
       { label: "correct", vocabWordId: overrides.targetVocabWordId },
@@ -98,7 +99,7 @@ describe("optimistic daily answers", () => {
       "2026-05-20T12:10:00.000Z",
     );
 
-    expect(result.correctionWord).toMatchObject({
+    expect(result.correction?.targetWord).toMatchObject({
       id: "session-word-1",
       last_attempted_at: "2026-05-20T12:10:00.000Z",
       last_question_type: "meaning_recognition",
@@ -130,8 +131,10 @@ describe("optimistic daily answers", () => {
 
   test("asks for a guess check on first correct SAT usage answer", () => {
     const word = sessionWord({
+      satisfied_definition_recall: true,
       satisfied_meaning_recognition: true,
       satisfied_reverse_recall: true,
+      satisfied_word_recall: true,
     });
     const question = studyQuestion({
       questionType: "sat_usage",
@@ -161,8 +164,10 @@ describe("optimistic daily answers", () => {
 
   test("completes the session when the final requirement is satisfied", () => {
     const word = sessionWord({
+      satisfied_definition_recall: true,
       satisfied_reverse_recall: true,
       satisfied_sat_usage: true,
+      satisfied_word_recall: true,
     });
     const question = studyQuestion({
       questionType: "meaning_recognition",
@@ -232,8 +237,10 @@ describe("optimistic daily answers", () => {
 describe("optimistic daily guess checks", () => {
   test("marks a guessed SAT usage answer as shaky", () => {
     const word = sessionWord({
+      satisfied_definition_recall: true,
       satisfied_meaning_recognition: true,
       satisfied_reverse_recall: true,
+      satisfied_word_recall: true,
     });
     const question = studyQuestion({
       questionType: "sat_usage",
@@ -263,8 +270,10 @@ describe("optimistic daily guess checks", () => {
 
   test("credits a known SAT usage answer after the guess check", () => {
     const word = sessionWord({
+      satisfied_definition_recall: true,
       satisfied_meaning_recognition: true,
       satisfied_reverse_recall: true,
+      satisfied_word_recall: true,
     });
     const question = studyQuestion({
       questionType: "sat_usage",
@@ -357,7 +366,7 @@ describe("optimistic forever review", () => {
       "2026-05-20T12:10:00.000Z",
     );
 
-    expect(result.correctionWord).toMatchObject({
+    expect(result.correction?.targetWord).toMatchObject({
       miss_count: 1,
       status: "shaky",
     });
@@ -368,8 +377,10 @@ describe("optimistic forever review", () => {
     const word = sessionWord({
       id: "target",
       source: "review",
+      satisfied_definition_recall: true,
       satisfied_meaning_recognition: true,
       satisfied_reverse_recall: true,
+      satisfied_word_recall: true,
       status: "shaky",
     });
     const question = studyQuestion({

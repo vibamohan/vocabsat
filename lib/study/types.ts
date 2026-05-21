@@ -2,9 +2,13 @@ export const QUESTION_TYPES = [
   "meaning_recognition",
   "reverse_recall",
   "sat_usage",
+  "word_recall",
+  "definition_recall",
 ] as const;
 
 export type QuestionType = (typeof QUESTION_TYPES)[number];
+
+export type AnswerMode = "multiple_choice" | "typed";
 
 export type DailyWordStatus = "new" | "shaky" | "stable" | "recall_ready";
 
@@ -13,6 +17,10 @@ export type StudySessionPhase = "learn" | "practice" | "complete";
 export type CompletionReason = "mastered" | "question_cap" | "manual";
 
 export type AnswerConfidence = "known" | "guessed";
+
+export type DefinitionSelfGrade = "correct" | "incorrect" | "unsure";
+
+export type TypedAnswerGrade = "correct" | "incorrect" | "unsure";
 
 export type UserWordStatus = "learning" | "weak" | "recall_ready";
 
@@ -55,6 +63,8 @@ export type SessionWord = {
   satisfied_meaning_recognition: boolean;
   satisfied_reverse_recall: boolean;
   satisfied_sat_usage: boolean;
+  satisfied_word_recall: boolean;
+  satisfied_definition_recall: boolean;
   correct_count: number;
   miss_count: number;
   guessed_count: number;
@@ -80,12 +90,21 @@ export type StudyQuestionOption = {
 };
 
 export type StudyQuestion = {
+  answerMode: AnswerMode;
   questionType: QuestionType;
   targetSessionWordId: string;
   targetVocabWordId: number;
   prompt: string;
   helperText: string;
   options: StudyQuestionOption[];
+};
+
+export type CorrectionFeedback = {
+  answerMode: AnswerMode;
+  questionType: QuestionType;
+  selectedWord?: VocabWord;
+  targetWord: SessionWordWithWord;
+  typedAnswer?: string;
 };
 
 export type TodaySessionSummary =

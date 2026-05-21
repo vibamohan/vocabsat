@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowRight, BookOpenCheck, Check, RotateCcw, X } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,12 +13,15 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { getPrimaryExampleSentence } from "@/lib/study/example-sentences";
 import { getQuestionTypeLabel } from "@/lib/study/questions";
 import { getStudyProgress, type StudyProgress } from "@/lib/study/progress";
 import type {
   AnswerConfidence,
+  CorrectionFeedback,
+  DefinitionSelfGrade,
   ForeverReviewCheckpoint,
   ForeverReviewSummary,
   ForeverReviewView,
@@ -109,11 +112,13 @@ export function LearnScreen({
 export function QuestionScreen({
   isPending,
   onAnswer,
+  onTypedAnswer,
   variant = "daily",
   view,
 }: {
   isPending?: boolean;
   onAnswer: (question: StudyQuestion, selectedVocabWordId: number) => void;
+  onTypedAnswer?: (question: StudyQuestion, typedAnswer: string) => void;
   variant?: "daily" | "review";
   view: QuestionScreenView;
 }) {
@@ -139,26 +144,77 @@ export function QuestionScreen({
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex flex-col gap-3">
-            {view.question.options.map((option, index) => (
-              <Button
-                key={option.vocabWordId}
-                className="h-auto min-h-14 justify-start whitespace-normal px-4 py-3 text-left"
-                disabled={isPending}
-                onClick={() => onAnswer(view.question, option.vocabWordId)}
-                type="button"
-                variant="outline"
-              >
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-muted text-xs font-semibold">
-                  {ANSWER_LETTERS[index]}
-                </span>
-                <span className="leading-relaxed">{option.label}</span>
-              </Button>
-            ))}
-          </div>
+          {view.question.answerMode === "typed" ? (
+            <TypedAnswerForm
+              isPending={isPending}
+              onTypedAnswer={(typedAnswer) =>
+                onTypedAnswer?.(view.question, typedAnswer)
+              }
+            />
+          ) : (
+            <div className="flex flex-col gap-3">
+              {view.question.options.map((option, index) => (
+                <Button
+                  key={option.vocabWordId}
+                  className="h-auto min-h-14 justify-start whitespace-normal px-4 py-3 text-left"
+                  disabled={isPending}
+                  onClick={() => onAnswer(view.question, option.vocabWordId)}
+                  type="button"
+                  variant="outline"
+                >
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-muted text-xs font-semibold">
+                    {ANSWER_LETTERS[index]}
+                  </span>
+                  <span className="leading-relaxed">{option.label}</span>
+                </Button>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </StudyStage>
+  );
+}
+
+function TypedAnswerForm({
+  isPending,
+  onTypedAnswer,
+}: {
+  isPending?: boolean;
+  onTypedAnswer: (typedAnswer: string) => void;
+}) {
+  const [typedAnswer, setTypedAnswer] = useState("");
+  const trimmedAnswer = typedAnswer.trim();
+
+  return (
+    <form
+      className="flex flex-col gap-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+
+        if (trimmedAnswer) {
+          onTypedAnswer(trimmedAnswer);
+          setTypedAnswer("");
+        }
+      }}
+    >
+      <Input
+        autoComplete="off"
+        autoFocus
+        disabled={isPending}
+        onChange={(event) => setTypedAnswer(event.target.value)}
+        placeholder="Type your answer"
+        value={typedAnswer}
+      />
+      <Button
+        className="w-fit"
+        disabled={isPending || !trimmedAnswer}
+        type="submit"
+      >
+        Check answer
+        <ArrowRight data-icon="inline-end" />
+      </Button>
+    </form>
   );
 }
 
@@ -209,16 +265,18 @@ export function ReviewStartScreen({
 }
 
 export function CorrectionScreen({
+  correction,
   isPending,
   onContinue,
   progressContext,
-  word,
 }: {
+  correction: CorrectionFeedback;
   isPending?: boolean;
   onContinue: () => void;
   progressContext?: StudyProgressContext;
-  word: SessionWordWithWord;
 }) {
+  const word = correction.targetWord;
+
   return (
     <StudyStage progressContext={progressContext}>
       <Card className="w-full">
@@ -230,12 +288,36 @@ export function CorrectionScreen({
             {capitalize(word.vocab_word.word)}
           </CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <div className="flex flex-col gap-2">
-            <p className="text-lg leading-relaxed">
-              {word.vocab_word.fast_meaning}
-            </p>
-          </div>
+        <CardContent className="flex flex-col gap-5">
+          {correction.answerMode === "multiple_choice" &&
+          correction.selectedWord ? (
+            <>
+              <AnswerContrast
+                label="You chose"
+                meaning={correction.selectedWord.fast_meaning}
+                word={correction.selectedWord.word}
+              />
+              <Separator />
+            </>
+          ) : null}
+          {correction.answerMode === "typed" && correction.typedAnswer ? (
+            <>
+              <div className="flex flex-col gap-2">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  You typed
+                </p>
+                <p className="text-lg leading-relaxed">
+                  {correction.typedAnswer}
+                </p>
+              </div>
+              <Separator />
+            </>
+          ) : null}
+          <AnswerContrast
+            label="Correct answer"
+            meaning={word.vocab_word.fast_meaning}
+            word={word.vocab_word.word}
+          />
           <Separator />
           <p className="leading-relaxed text-muted-foreground">
             {getPrimaryExampleSentence(word.vocab_word.example_sentence)}
@@ -246,6 +328,104 @@ export function CorrectionScreen({
             Continue
             <ArrowRight data-icon="inline-end" />
           </Button>
+        </CardFooter>
+      </Card>
+    </StudyStage>
+  );
+}
+
+function AnswerContrast({
+  label,
+  meaning,
+  word,
+}: {
+  label: string;
+  meaning: string;
+  word: string;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
+      <div className="flex flex-col gap-1">
+        <p className="text-xl font-semibold leading-snug">{capitalize(word)}</p>
+        <p className="leading-relaxed text-muted-foreground">{meaning}</p>
+      </div>
+    </div>
+  );
+}
+
+export function DefinitionSelfCheckScreen({
+  isPending,
+  onGrade,
+  progressContext,
+  typedAnswer,
+  word,
+}: {
+  isPending?: boolean;
+  onGrade: (grade: DefinitionSelfGrade) => void;
+  progressContext?: StudyProgressContext;
+  typedAnswer: string;
+  word: SessionWordWithWord;
+}) {
+  return (
+    <StudyStage progressContext={progressContext}>
+      <Card className="w-full">
+        <CardHeader>
+          <Badge variant="secondary" className="w-fit">
+            Check
+          </Badge>
+          <CardTitle className="text-4xl leading-tight">
+            {capitalize(word.vocab_word.word)}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-5">
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              You typed
+            </p>
+            <p className="text-lg leading-relaxed">{typedAnswer}</p>
+          </div>
+          <Separator />
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Expected meaning
+            </p>
+            <p className="text-lg leading-relaxed">
+              {word.vocab_word.fast_meaning}
+            </p>
+          </div>
+        </CardContent>
+        <CardFooter>
+          <div className="flex flex-wrap gap-3">
+            <Button
+              disabled={isPending}
+              onClick={() => onGrade("correct")}
+              type="button"
+            >
+              <Check data-icon="inline-start" />
+              I was right
+            </Button>
+            <Button
+              disabled={isPending}
+              onClick={() => onGrade("incorrect")}
+              type="button"
+              variant="outline"
+            >
+              <X data-icon="inline-start" />
+              I was wrong
+            </Button>
+            <Button
+              disabled={isPending}
+              onClick={() => onGrade("unsure")}
+              type="button"
+              variant="outline"
+            >
+              <RotateCcw data-icon="inline-start" />
+              Unsure
+            </Button>
+          </div>
         </CardFooter>
       </Card>
     </StudyStage>
