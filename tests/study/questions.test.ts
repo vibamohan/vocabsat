@@ -278,6 +278,166 @@ describe("daily question building", () => {
     expect(question?.targetSessionWordId).toBe("uncooled-word");
   });
 
+  test("weights newer attempt results more than older attempt results", () => {
+    const newerMissedWord = sessionWord({
+      id: "newer-missed-word",
+      last_attempted_at: "2026-05-20T12:04:00.000Z",
+      position: 0,
+      vocab_word_id: 1,
+      word: { id: 1 },
+    });
+    const olderMissedWord = sessionWord({
+      id: "older-missed-word",
+      last_attempted_at: "2026-05-20T12:04:00.000Z",
+      position: 1,
+      vocab_word_id: 2,
+      word: { id: 2 },
+    });
+
+    const question = buildNextQuestion(
+      studySession(),
+      [newerMissedWord, olderMissedWord],
+      [
+        {
+          created_at: "2026-05-20T12:05:00.000Z",
+          question_type: "meaning_recognition",
+          session_word_id: "outside-word",
+        },
+        {
+          created_at: "2026-05-20T12:04:00.000Z",
+          question_type: "meaning_recognition",
+          result: "incorrect",
+          session_word_id: "newer-missed-word",
+        },
+        {
+          created_at: "2026-05-20T12:03:00.000Z",
+          question_type: "reverse_recall",
+          result: "correct",
+          session_word_id: "newer-missed-word",
+        },
+        {
+          created_at: "2026-05-20T12:04:00.000Z",
+          question_type: "meaning_recognition",
+          result: "correct",
+          session_word_id: "older-missed-word",
+        },
+        {
+          created_at: "2026-05-20T12:03:00.000Z",
+          question_type: "reverse_recall",
+          result: "incorrect",
+          session_word_id: "older-missed-word",
+        },
+      ],
+    );
+
+    expect(question?.targetSessionWordId).toBe("newer-missed-word");
+  });
+
+  test("raises incorrect and unsure words above correct words", () => {
+    const correctWord = sessionWord({
+      id: "correct-word",
+      position: 0,
+      vocab_word_id: 1,
+      word: { id: 1 },
+    });
+    const unsureWord = sessionWord({
+      id: "unsure-word",
+      position: 1,
+      vocab_word_id: 2,
+      word: { id: 2 },
+    });
+    const missedWord = sessionWord({
+      id: "missed-word",
+      position: 2,
+      vocab_word_id: 3,
+      word: { id: 3 },
+    });
+
+    const question = buildNextQuestion(
+      studySession(),
+      [correctWord, unsureWord, missedWord],
+      [
+        {
+          created_at: "2026-05-20T12:05:00.000Z",
+          question_type: "meaning_recognition",
+          session_word_id: "outside-word",
+        },
+        {
+          created_at: "2026-05-20T12:04:00.000Z",
+          question_type: "meaning_recognition",
+          result: "correct",
+          session_word_id: "correct-word",
+        },
+        {
+          created_at: "2026-05-20T12:04:00.000Z",
+          question_type: "meaning_recognition",
+          result: "unsure",
+          session_word_id: "unsure-word",
+        },
+        {
+          created_at: "2026-05-20T12:04:00.000Z",
+          question_type: "meaning_recognition",
+          result: "incorrect",
+          session_word_id: "missed-word",
+        },
+      ],
+    );
+
+    expect(question?.targetSessionWordId).toBe("missed-word");
+  });
+
+  test("selects questions from the active six-word daily chunk", () => {
+    const firstChunkWords = Array.from({ length: 6 }, (_, index) =>
+      sessionWord({
+        id: `first-chunk-${index}`,
+        position: index,
+        vocab_word_id: index + 1,
+        word: { id: index + 1 },
+      }),
+    );
+    const secondChunkWord = sessionWord({
+      id: "second-chunk-shaky",
+      miss_count: 10,
+      position: 6,
+      status: "shaky",
+      vocab_word_id: 7,
+      word: { id: 7 },
+    });
+
+    const question = buildNextQuestion(
+      studySession(),
+      [...firstChunkWords, secondChunkWord],
+      null,
+    );
+
+    expect(question?.targetSessionWordId).toBe("first-chunk-0");
+  });
+
+  test("moves to the next daily chunk after the current chunk is recall-ready", () => {
+    const readyFirstChunk = Array.from({ length: 6 }, (_, index) =>
+      satisfiedWord({
+        id: `ready-first-chunk-${index}`,
+        position: index,
+        vocab_word_id: index + 1,
+        word: { id: index + 1 },
+      }),
+    );
+    const secondChunkWord = sessionWord({
+      id: "second-chunk-word",
+      position: 6,
+      vocab_word_id: 7,
+      word: { id: 7 },
+    });
+
+    const question = buildNextQuestion(
+      studySession(),
+      [...readyFirstChunk, secondChunkWord],
+      null,
+    );
+
+    expect(question?.targetSessionWordId).toBe("second-chunk-word");
+  });
+
   test("fills options with unique distractors", () => {
     const target = sessionWord({
       vocab_word_id: 1,
@@ -490,7 +650,7 @@ describe("forever review question building", () => {
     expect(question?.targetSessionWordId).toBe("weak-word");
   });
 
-  test("gives unattempted review words a first pass before attempted weak words", () => {
+  test("brings attempted weak review words back before first-pass ready words", () => {
     const attemptedWeakWord = sessionWord({
       id: "attempted-weak-word",
       last_attempted_at: "2026-05-20T12:05:00.000Z",
@@ -516,10 +676,10 @@ describe("forever review question building", () => {
       null,
     );
 
-    expect(question?.targetSessionWordId).toBe("unattempted-ready-word");
+    expect(question?.targetSessionWordId).toBe("attempted-weak-word");
   });
 
-  test("does not alternate between two recent weak words when another review word is available", () => {
+  test("returns to weak review words after one intervening card", () => {
     const firstWeakWord = sessionWord({
       id: "first-weak-word",
       last_attempted_at: "2026-05-20T12:10:00.000Z",
@@ -566,7 +726,7 @@ describe("forever review question building", () => {
       ],
     );
 
-    expect(question?.targetSessionWordId).toBe("ready-word");
+    expect(question?.targetSessionWordId).toBe("second-weak-word");
   });
 
   test("falls back to cooled review words when every candidate is recent", () => {
@@ -588,5 +748,37 @@ describe("forever review question building", () => {
     );
 
     expect(question?.targetSessionWordId).toBe("only-word");
+  });
+
+  test("uses six-word chunks for forever review", () => {
+    const firstChunkWords = Array.from({ length: 6 }, (_, index) =>
+      sessionWord({
+        id: `first-review-chunk-${index}`,
+        miss_count: 10,
+        position: index,
+        source: "review",
+        status: "shaky",
+        vocab_word_id: index + 1,
+        word: { id: index + 1 },
+      }),
+    );
+    const secondChunkWord = satisfiedWord({
+      id: "second-review-chunk",
+      position: 6,
+      source: "review",
+      vocab_word_id: 7,
+      word: { id: 7 },
+    });
+
+    const question = buildNextForeverReviewQuestion(
+      studySession({
+        session_type: "forever_review",
+        total_questions_answered: 6,
+      }),
+      [...firstChunkWords, secondChunkWord],
+      null,
+    );
+
+    expect(question?.targetSessionWordId).toBe("second-review-chunk");
   });
 });

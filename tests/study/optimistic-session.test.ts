@@ -594,4 +594,55 @@ describe("optimistic forever review", () => {
       weakWordsFound: 0,
     });
   });
+
+  test("keeps optimistic attempt history aligned with scheduler scoring", () => {
+    const view = foreverReviewView({
+      recentAttempts: Array.from({ length: 5 }, (_, index) => ({
+        created_at: `2026-05-20T12:0${index}:00.000Z`,
+        question_type: "meaning_recognition",
+        result: "correct",
+        session_word_id: `previous-${index}`,
+      })),
+      words: [
+        sessionWord({
+          id: "target",
+          source: "review",
+          status: "shaky",
+          vocab_word_id: 1,
+          word: { id: 1 },
+        }),
+        sessionWord({
+          id: "next",
+          source: "review",
+          status: "shaky",
+          vocab_word_id: 2,
+          word: { id: 2 },
+        }),
+      ],
+    });
+    const question = studyQuestion({
+      questionType: "meaning_recognition",
+      targetSessionWordId: "target",
+      targetVocabWordId: 1,
+    });
+    const review = buildMultipleChoiceAnswerReview(
+      { ...view, question },
+      question,
+      999,
+      "attempt-1",
+    );
+
+    const result = applyOptimisticForeverReviewAnswerReview(
+      { ...view, question },
+      review,
+      "incorrect",
+      "2026-05-20T12:10:00.000Z",
+    );
+
+    expect(result.nextView.recentAttempts).toHaveLength(6);
+    expect(result.nextView.recentAttempts[0]).toMatchObject({
+      result: "incorrect",
+      session_word_id: "target",
+    });
+  });
 });

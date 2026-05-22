@@ -1,9 +1,11 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  buildDailyWordSelection,
   getSeenVocabWordIds,
   getMissingForeverReviewSelections,
   getUnseenWordsByUserOrder,
+  type DailySelectionMasteryRow,
   type SelectedSessionWord,
 } from "@/lib/study/client-session";
 import { vocabWord } from "./factories";
@@ -13,6 +15,23 @@ function selectedWord(id: number): SelectedSessionWord {
     masteryStatus: "recall_ready",
     source: "review",
     word: vocabWord({ id }),
+  };
+}
+
+function masteryRow(
+  overrides: Partial<DailySelectionMasteryRow> & { vocab_word_id: number },
+): DailySelectionMasteryRow {
+  return {
+    correct_count: 0,
+    guessed_count: 0,
+    last_ready_at: null,
+    last_seen_at: "2026-04-20T12:00:00.000Z",
+    miss_count: 0,
+    next_review_on: "2026-05-20",
+    review_interval_days: 1,
+    status: "recall_ready",
+    user_id: "user-1",
+    ...overrides,
   };
 }
 
@@ -60,5 +79,85 @@ describe("daily word selection helpers", () => {
     );
 
     expect(unseenWords.map((word) => word.id)).toEqual([2, 3]);
+  });
+
+  test("selects six new and six review words for daily sessions", () => {
+    const words = Array.from({ length: 18 }, (_, index) =>
+      vocabWord({ id: index + 1 }),
+    );
+    const masteryRows = Array.from({ length: 8 }, (_, index) =>
+      masteryRow({ vocab_word_id: index + 1 }),
+    );
+
+    const selectedWords = buildDailyWordSelection({
+      masteryRows,
+      seenSessionWordRows: [],
+      studyDate: "2026-05-20",
+      userId: "user-1",
+      words,
+    });
+
+    expect(selectedWords).toHaveLength(12);
+    expect(selectedWords.filter((entry) => entry.source === "new")).toHaveLength(
+      6,
+    );
+    expect(
+      selectedWords.filter((entry) => entry.source === "review"),
+    ).toHaveLength(6);
+  });
+
+  test("orders daily selections as two chunks of three new and three review words", () => {
+    const words = Array.from({ length: 18 }, (_, index) =>
+      vocabWord({ id: index + 1 }),
+    );
+    const masteryRows = Array.from({ length: 6 }, (_, index) =>
+      masteryRow({ vocab_word_id: index + 1 }),
+    );
+
+    const selectedWords = buildDailyWordSelection({
+      masteryRows,
+      seenSessionWordRows: [],
+      studyDate: "2026-05-20",
+      userId: "user-1",
+      words,
+    });
+
+    expect(selectedWords.map((entry) => entry.source)).toEqual([
+      "new",
+      "new",
+      "new",
+      "review",
+      "review",
+      "review",
+      "new",
+      "new",
+      "new",
+      "review",
+      "review",
+      "review",
+    ]);
+  });
+
+  test("uses available daily pools without exceeding twelve words", () => {
+    const words = Array.from({ length: 10 }, (_, index) =>
+      vocabWord({ id: index + 1 }),
+    );
+    const masteryRows = [masteryRow({ vocab_word_id: 1 })];
+
+    const selectedWords = buildDailyWordSelection({
+      masteryRows,
+      seenSessionWordRows: [],
+      studyDate: "2026-05-20",
+      userId: "user-1",
+      words,
+    });
+
+    expect(selectedWords).toHaveLength(7);
+    expect(selectedWords.filter((entry) => entry.source === "new")).toHaveLength(
+      6,
+    );
+    expect(
+      selectedWords.filter((entry) => entry.source === "review"),
+    ).toHaveLength(1);
   });
 });

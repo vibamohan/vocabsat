@@ -84,6 +84,7 @@ export type LatestAttempt = {
   session_word_id: string;
   question_type: QuestionType;
   created_at: string;
+  result?: "correct" | "incorrect" | "unsure";
 };
 
 export type StudyQuestionOption = {

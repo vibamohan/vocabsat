@@ -1,13 +1,13 @@
 "use client";
 
 import {
+  DAILY_NEW_WORD_COUNT,
+  DAILY_REVIEW_WORD_COUNT,
   FOREVER_REVIEW_STALE_DAYS,
   FOREVER_REVIEW_QUESTION_CAP,
   getDailyWordCount,
-  MAX_DAILY_REVIEW_WORD_COUNT,
   QUESTION_CAP,
   QUESTION_CAP_PER_WORD,
-  RECENT_WORD_COOLDOWN_COUNT,
   REVIEW_INTERVAL_DAYS,
 } from "@/lib/study/config";
 import { addDaysToStudyDate, getStudyDate } from "@/lib/study/dates";
@@ -77,6 +77,8 @@ type AttemptRow = {
 type SeenWordRow = {
   vocab_word_id: number;
 };
+
+export type DailySelectionMasteryRow = MasteryRow;
 
 type SubmitMultipleChoiceAnswerInput = {
   attemptId: string;
@@ -1412,20 +1414,38 @@ async function getRecentAttempts(
 ): Promise<LatestAttempt[]> {
   const { data, error } = await supabase
     .from("study_question_attempts")
-    .select("session_word_id, question_type, created_at")
+    .select("session_word_id, question_type, created_at, is_correct, confidence")
     .eq("session_id", sessionId)
     .order("created_at", { ascending: false })
-    .limit(RECENT_WORD_COOLDOWN_COUNT);
+    .limit(200);
 
   assertNoError(error, "Unable to load recent attempts");
 
-  return (data ?? []) as LatestAttempt[];
+  return ((data ?? []) as Pick<
+    AttemptRow,
+    "session_word_id" | "question_type" | "created_at" | "is_correct" | "confidence"
+  >[]).map((attempt) => ({
+    created_at: attempt.created_at,
+    question_type: attempt.question_type,
+    result: getAttemptResult(attempt),
+    session_word_id: attempt.session_word_id,
+  }));
+}
+
+function getAttemptResult(
+  attempt: Pick<AttemptRow, "is_correct" | "confidence">,
+): NonNullable<LatestAttempt["result"]> {
+  if (!attempt.is_correct) {
+    return "incorrect";
+  }
+
+  return attempt.confidence === "guessed" ? "unsure" : "correct";
 }
 
 async function selectWordsForToday(
   supabase: SupabaseClient,
   userId: string,
-  limit: number,
+  _limit: number,
   studyDate: string,
 ): Promise<SelectedSessionWord[]> {
   const [
@@ -1456,81 +1476,13 @@ async function selectWordsForToday(
   const masteryRows = (masteryData ?? []) as MasteryRow[];
   const seenSessionWordRows = (seenSessionWordData ?? []) as SeenWordRow[];
   const words = (wordData ?? []) as VocabWord[];
-  const wordsById = new Map(words.map((word) => [word.id, word]));
-  const wordOrderRankById = new Map<number, number>(
-    words.map((word): [number, number] => [
-      word.id,
-      getUserWordOrderRank(userId, word),
-    ]),
-  );
-  const wordsByUserOrder = [...words].sort((first, second) =>
-    compareWordsByUserOrder(first, second, wordOrderRankById),
-  );
-  const seenWordIds = getSeenVocabWordIds(masteryRows, seenSessionWordRows);
-  const selected = new Map<number, SelectedSessionWord>();
-
-  masteryRows
-    .filter((row) => isDueForReview(row, studyDate))
-    .sort((first, second) => {
-      const statusComparison =
-        getDueReviewStatusPriority(second) - getDueReviewStatusPriority(first);
-
-      if (statusComparison !== 0) {
-        return statusComparison;
-      }
-
-      const firstScore = getMasteryPriority(first);
-      const secondScore = getMasteryPriority(second);
-
-      if (firstScore !== secondScore) {
-        return secondScore - firstScore;
-      }
-
-      const lastSeenComparison = (first.last_seen_at ?? "").localeCompare(
-        second.last_seen_at ?? "",
-      );
-
-      if (lastSeenComparison !== 0) {
-        return lastSeenComparison;
-      }
-
-      return compareMasteryRowsByUserOrder(
-        first,
-        second,
-        wordOrderRankById,
-      );
-    })
-    .forEach((row) => {
-      const word = wordsById.get(row.vocab_word_id);
-
-      if (word && selected.size < MAX_DAILY_REVIEW_WORD_COUNT) {
-        selected.set(word.id, {
-          masteryStatus: row.status,
-          source: "review",
-          word,
-        });
-      }
-    });
-
-  for (const word of getUnseenWordsByUserOrder(
-    wordsByUserOrder,
-    seenWordIds,
-    selected,
-  )) {
-    const newWordCount = getSelectedSourceCount(selected, "new");
-
-    if (newWordCount >= limit) {
-      break;
-    }
-
-    selected.set(word.id, {
-      masteryStatus: null,
-      source: "new",
-      word,
-    });
-  }
-
-  return Array.from(selected.values());
+  return buildDailyWordSelection({
+    masteryRows,
+    seenSessionWordRows,
+    studyDate,
+    userId,
+    words,
+  });
 }
 
 async function getNextReplacementWord(
@@ -1605,6 +1557,61 @@ export function getUnseenWordsByUserOrder(
   return wordsByUserOrder.filter(
     (word) => !seenWordIds.has(word.id) && !excludedWordIds.has(word.id),
   );
+}
+
+export function buildDailyWordSelection({
+  masteryRows,
+  seenSessionWordRows,
+  studyDate,
+  userId,
+  words,
+}: {
+  masteryRows: DailySelectionMasteryRow[];
+  seenSessionWordRows: SeenWordRow[];
+  studyDate: string;
+  userId: string;
+  words: VocabWord[];
+}) {
+  const wordsById = new Map(words.map((word) => [word.id, word]));
+  const wordOrderRankById = new Map<number, number>(
+    words.map((word): [number, number] => [
+      word.id,
+      getUserWordOrderRank(userId, word),
+    ]),
+  );
+  const wordsByUserOrder = [...words].sort((first, second) =>
+    compareWordsByUserOrder(first, second, wordOrderRankById),
+  );
+  const selectedReviewWordIds = new Set<number>();
+  const reviewWords = masteryRows
+    .filter((row) => wordsById.has(row.vocab_word_id))
+    .sort((first, second) =>
+      compareDailyReviewRows(first, second, studyDate, wordOrderRankById),
+    )
+    .slice(0, DAILY_REVIEW_WORD_COUNT)
+    .map((row) => {
+      selectedReviewWordIds.add(row.vocab_word_id);
+
+      return {
+        masteryStatus: row.status,
+        source: "review" as const,
+        word: wordsById.get(row.vocab_word_id) as VocabWord,
+      };
+    });
+  const seenWordIds = getSeenVocabWordIds(masteryRows, seenSessionWordRows);
+  const newWords = getUnseenWordsByUserOrder(
+    wordsByUserOrder,
+    seenWordIds,
+    selectedReviewWordIds,
+  )
+    .slice(0, DAILY_NEW_WORD_COUNT)
+    .map((word) => ({
+      masteryStatus: null,
+      source: "new" as const,
+      word,
+    }));
+
+  return interleaveDailyChunks(newWords, reviewWords);
 }
 
 async function selectWordsForForeverReview(
@@ -1716,35 +1723,58 @@ function getInitialForeverReviewWordState(entry: SelectedSessionWord) {
   };
 }
 
-function getSelectedSourceCount(
-  selected: Map<number, SelectedSessionWord>,
-  source: SessionWordSource,
-) {
-  return Array.from(selected.values()).filter((entry) => entry.source === source)
-    .length;
-}
-
 function isDueForReview(row: MasteryRow, studyDate: string) {
   return Boolean(row.next_review_on && row.next_review_on <= studyDate);
 }
 
-function getDueReviewStatusPriority(row: MasteryRow) {
-  if (row.status === "weak") {
-    return 3;
+function interleaveDailyChunks(
+  newWords: SelectedSessionWord[],
+  reviewWords: SelectedSessionWord[],
+) {
+  const result: SelectedSessionWord[] = [];
+
+  for (let chunkIndex = 0; chunkIndex < 2; chunkIndex += 1) {
+    result.push(...newWords.slice(chunkIndex * 3, chunkIndex * 3 + 3));
+    result.push(...reviewWords.slice(chunkIndex * 3, chunkIndex * 3 + 3));
   }
 
-  if (row.status === "learning") {
-    return 2;
-  }
-
-  return 1;
+  return result.slice(0, DAILY_NEW_WORD_COUNT + DAILY_REVIEW_WORD_COUNT);
 }
 
-function getMasteryPriority(row: MasteryRow) {
-  const statusScore = row.status === "weak" ? 100 : 50;
-  return (
-    statusScore + row.miss_count * 8 + row.guessed_count * 6 - row.correct_count
+function compareDailyReviewRows(
+  first: MasteryRow,
+  second: MasteryRow,
+  studyDate: string,
+  wordOrderRankById: Map<number, number>,
+) {
+  const firstScore = getDailyReviewMasteryPriority(first, studyDate);
+  const secondScore = getDailyReviewMasteryPriority(second, studyDate);
+
+  if (firstScore !== secondScore) {
+    return secondScore - firstScore;
+  }
+
+  const lastSeenComparison = (first.last_seen_at ?? "").localeCompare(
+    second.last_seen_at ?? "",
   );
+
+  if (lastSeenComparison !== 0) {
+    return lastSeenComparison;
+  }
+
+  return compareMasteryRowsByUserOrder(first, second, wordOrderRankById);
+}
+
+function getDailyReviewMasteryPriority(row: MasteryRow, studyDate: string) {
+  const statusScore =
+    row.status === "weak" ? 1000 : row.status === "learning" ? 650 : 300;
+  const dueScore = isDueForReview(row, studyDate) ? 900 : 0;
+  const staleScore = isStaleForReview(row, studyDate) ? 280 : 0;
+  const freshnessScore = row.last_seen_at ? 0 : 120;
+  const performanceScore =
+    row.miss_count * 30 + row.guessed_count * 20 - row.correct_count * 2;
+
+  return statusScore + dueScore + staleScore + freshnessScore + performanceScore;
 }
 
 function getForeverReviewMasteryPriority(row: MasteryRow, studyDate: string) {

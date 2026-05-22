@@ -8,7 +8,11 @@ import {
   type TypedAnswerGrade,
   type VocabWord,
 } from "@/lib/study/types";
-import { RECENT_WORD_COOLDOWN_COUNT } from "@/lib/study/config";
+import {
+  DAILY_CHUNK_SIZE,
+  FOREVER_REVIEW_CHUNK_SIZE,
+  RECENT_WORD_COOLDOWN_COUNT,
+} from "@/lib/study/config";
 import { getExampleSentences } from "@/lib/study/example-sentences";
 import random from "random";
 
@@ -18,6 +22,13 @@ type QuestionCombination = {
   word: SessionWordWithWord;
   questionType: QuestionType;
   score: number;
+};
+
+type SchedulerMode = "daily" | "forever_review";
+
+type WordAttemptStats = {
+  difficultyScore: number;
+  lastAttemptIndex: number;
 };
 
 const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
@@ -104,9 +115,11 @@ export function buildNextQuestion(
   optionWords: VocabWord[] = words.map((word) => word.vocab_word),
 ): StudyQuestion | null {
   return buildNextScheduledQuestion({
+    chunkSize: DAILY_CHUNK_SIZE,
     getQuestionType: getNextUnsatisfiedQuestionType,
     getWordPriority,
     isEligible: (word) => word.status !== "recall_ready",
+    mode: "daily",
     optionWords,
     recentAttempts,
     session,
@@ -121,11 +134,13 @@ export function buildNextForeverReviewQuestion(
   optionWords: VocabWord[] = words.map((word) => word.vocab_word),
 ): StudyQuestion | null {
   return buildNextScheduledQuestion({
+    chunkSize: FOREVER_REVIEW_CHUNK_SIZE,
     getQuestionType: (word) =>
       getNextUnsatisfiedQuestionType(word) ??
       getReviewQuestionType(session, word),
     getWordPriority: getForeverReviewWordPriority,
     isEligible: () => true,
+    mode: "forever_review",
     optionWords,
     recentAttempts,
     session,
@@ -134,24 +149,36 @@ export function buildNextForeverReviewQuestion(
 }
 
 function buildNextScheduledQuestion({
+  chunkSize,
   getQuestionType,
   getWordPriority,
   isEligible,
+  mode,
   optionWords,
   recentAttempts,
   session,
   words,
 }: {
+  chunkSize: number;
   getQuestionType: (word: SessionWordWithWord) => QuestionType | undefined;
   getWordPriority: (word: SessionWordWithWord) => number;
   isEligible: (word: SessionWordWithWord) => boolean;
+  mode: SchedulerMode;
   optionWords: VocabWord[];
   recentAttempts: RecentAttemptsInput;
   session: StudySession;
   words: SessionWordWithWord[];
 }) {
   const attempts = getRecentAttempts(recentAttempts);
-  const combinations = words.flatMap((word) => {
+  const activeWords = getActiveChunkWords({
+    chunkSize,
+    isEligible,
+    mode,
+    session,
+    words,
+  });
+  const attemptStats = getWordAttemptStats(attempts);
+  const combinations = activeWords.flatMap((word) => {
     if (!isEligible(word)) {
       return [];
     }
@@ -163,43 +190,16 @@ function buildNextScheduledQuestion({
           {
             word,
             questionType,
-            score: getWordPriority(word) + getStagePriority(questionType),
+            score:
+              getWordPriority(word) +
+              getStagePriority(questionType) +
+              getAttemptPriority(word, attemptStats),
           },
         ]
       : [];
   });
 
-  const rankedCombinations = combinations.sort((first, second) => {
-    const firstCoolingDown = isCoolingDown(first.word, attempts);
-    const secondCoolingDown = isCoolingDown(second.word, attempts);
-
-    if (firstCoolingDown !== secondCoolingDown) {
-      return firstCoolingDown ? 1 : -1;
-    }
-
-    const firstScore = getAdjustedScore(first, attempts);
-    const secondScore = getAdjustedScore(second, attempts);
-
-    if (firstScore !== secondScore) {
-      return secondScore - firstScore;
-    }
-
-    if (first.word.last_attempted_at !== second.word.last_attempted_at) {
-      if (!first.word.last_attempted_at) {
-        return -1;
-      }
-
-      if (!second.word.last_attempted_at) {
-        return 1;
-      }
-
-      return first.word.last_attempted_at.localeCompare(
-        second.word.last_attempted_at,
-      );
-    }
-
-    return first.word.position - second.word.position;
-  });
+  const rankedCombinations = rankCombinations(combinations, attempts);
 
   const selected = rankedCombinations[0];
 
@@ -213,6 +213,52 @@ function buildNextScheduledQuestion({
     words,
     optionWords,
     getQuestionSeed(session, selected.word, selected.questionType),
+  );
+}
+
+function getActiveChunkWords({
+  chunkSize,
+  isEligible,
+  mode,
+  session,
+  words,
+}: {
+  chunkSize: number;
+  isEligible: (word: SessionWordWithWord) => boolean;
+  mode: SchedulerMode;
+  session: StudySession;
+  words: SessionWordWithWord[];
+}) {
+  const chunks = getWordChunks(words, chunkSize);
+
+  if (mode === "forever_review") {
+    if (chunks.length === 0) {
+      return [];
+    }
+
+    return chunks[getForeverReviewChunkIndex(session, chunks.length)] ?? [];
+  }
+
+  return chunks.find((chunk) => chunk.some(isEligible)) ?? [];
+}
+
+function getWordChunks(words: SessionWordWithWord[], chunkSize: number) {
+  const orderedWords = [...words].sort(
+    (first, second) => first.position - second.position,
+  );
+  const chunks: SessionWordWithWord[][] = [];
+
+  for (let index = 0; index < orderedWords.length; index += chunkSize) {
+    chunks.push(orderedWords.slice(index, index + chunkSize));
+  }
+
+  return chunks;
+}
+
+function getForeverReviewChunkIndex(session: StudySession, chunkCount: number) {
+  return (
+    Math.floor(session.total_questions_answered / FOREVER_REVIEW_CHUNK_SIZE) %
+    chunkCount
   );
 }
 
@@ -234,14 +280,14 @@ function getWordPriority(word: SessionWordWithWord) {
 function getForeverReviewWordPriority(word: SessionWordWithWord) {
   const statusScore = {
     new: 45,
-    shaky: 110,
+    shaky: 160,
     stable: 45,
     recall_ready: 12,
   }[word.status];
 
   const attemptScore =
-    word.miss_count * 18 + word.guessed_count * 16 - word.correct_count * 2;
-  const freshnessScore = word.last_attempted_at ? 0 : 180;
+    word.miss_count * 45 + word.guessed_count * 32 - word.correct_count * 2;
+  const freshnessScore = word.last_attempted_at ? 0 : 60;
 
   return statusScore + attemptScore + freshnessScore;
 }
@@ -272,14 +318,102 @@ function getRecentAttempts(recentAttempts: RecentAttemptsInput) {
 
   return (Array.isArray(recentAttempts) ? recentAttempts : [recentAttempts])
     .filter(Boolean)
-    .slice(0, RECENT_WORD_COOLDOWN_COUNT);
+    .sort((first, second) => second.created_at.localeCompare(first.created_at));
 }
 
-function isCoolingDown(
+function getWordAttemptStats(recentAttempts: LatestAttempt[]) {
+  const attemptsByWord = new Map<string, LatestAttempt[]>();
+
+  recentAttempts.forEach((attempt) => {
+    const wordAttempts = attemptsByWord.get(attempt.session_word_id) ?? [];
+    wordAttempts.push(attempt);
+    attemptsByWord.set(attempt.session_word_id, wordAttempts);
+  });
+
+  const stats = new Map<string, WordAttemptStats>();
+
+  attemptsByWord.forEach((wordAttempts, sessionWordId) => {
+    const lastFiveAttempts = wordAttempts.slice(0, 5);
+    const weightedDifficulty = lastFiveAttempts.reduce((total, attempt, index) => {
+      const weight = lastFiveAttempts.length - index;
+      return total + getAttemptDifficulty(attempt) * weight;
+    }, 0);
+    const totalWeight = lastFiveAttempts.reduce(
+      (total, _attempt, index) => total + lastFiveAttempts.length - index,
+      0,
+    );
+
+    stats.set(sessionWordId, {
+      difficultyScore:
+        totalWeight > 0 ? Math.round((weightedDifficulty / totalWeight) * 140) : 0,
+      lastAttemptIndex: recentAttempts.findIndex(
+        (attempt) => attempt.session_word_id === sessionWordId,
+      ),
+    });
+  });
+
+  return stats;
+}
+
+function getAttemptDifficulty(attempt: LatestAttempt) {
+  if (attempt.result === "incorrect") {
+    return 1;
+  }
+
+  if (attempt.result === "unsure") {
+    return 0.55;
+  }
+
+  return 0;
+}
+
+function getAttemptPriority(
   word: SessionWordWithWord,
+  attemptStats: Map<string, WordAttemptStats>,
+) {
+  const stats = attemptStats.get(word.id);
+
+  if (!stats) {
+    return word.last_attempted_at ? 20 : 36;
+  }
+
+  return stats.difficultyScore + Math.min(stats.lastAttemptIndex * 16, 96);
+}
+
+function rankCombinations(
+  combinations: QuestionCombination[],
   recentAttempts: LatestAttempt[],
 ) {
-  return recentAttempts.some((attempt) => attempt.session_word_id === word.id);
+  const latestWordId = recentAttempts[0]?.session_word_id;
+  const nonRepeatingCombinations =
+    latestWordId && combinations.some((item) => item.word.id !== latestWordId)
+      ? combinations.filter((item) => item.word.id !== latestWordId)
+      : combinations;
+
+  return nonRepeatingCombinations.sort((first, second) => {
+    const firstScore = getAdjustedScore(first, recentAttempts);
+    const secondScore = getAdjustedScore(second, recentAttempts);
+
+    if (firstScore !== secondScore) {
+      return secondScore - firstScore;
+    }
+
+    if (first.word.last_attempted_at !== second.word.last_attempted_at) {
+      if (!first.word.last_attempted_at) {
+        return -1;
+      }
+
+      if (!second.word.last_attempted_at) {
+        return 1;
+      }
+
+      return first.word.last_attempted_at.localeCompare(
+        second.word.last_attempted_at,
+      );
+    }
+
+    return first.word.position - second.word.position;
+  });
 }
 
 function getAdjustedScore(
@@ -295,11 +429,11 @@ function getAdjustedScore(
   }
 
   const cooldownPenalty =
-    (RECENT_WORD_COOLDOWN_COUNT - recentAttemptIndex) * 220;
+    recentAttemptIndex === 0 ? RECENT_WORD_COOLDOWN_COUNT * 40 : 0;
   const repeatedQuestionPenalty =
     recentAttempts[recentAttemptIndex]?.question_type ===
     combination.questionType
-      ? 60
+      ? 40
       : 0;
 
   return combination.score - cooldownPenalty - repeatedQuestionPenalty;
