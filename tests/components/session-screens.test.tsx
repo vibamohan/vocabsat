@@ -221,10 +221,11 @@ describe("study session screens", () => {
       />,
     );
 
+    expect(screen.getByText("Not quite")).toBeInTheDocument();
     expect(screen.getByText("You chose")).toBeInTheDocument();
     expect(screen.getByText("Verbose")).toBeInTheDocument();
     expect(screen.getByText("Correct answer")).toBeInTheDocument();
-    expect(screen.getAllByText("Terse").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Terse")).toHaveLength(1);
   });
 
   test("self-grades a definition recall answer", async () => {

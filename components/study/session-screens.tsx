@@ -284,9 +284,7 @@ export function CorrectionScreen({
           <Badge variant="destructive" className="w-fit">
             Incorrect
           </Badge>
-          <CardTitle className="text-4xl leading-tight">
-            {capitalize(word.vocab_word.word)}
-          </CardTitle>
+          <CardTitle className="text-4xl leading-tight">Not quite</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
           {correction.answerMode === "multiple_choice" &&
