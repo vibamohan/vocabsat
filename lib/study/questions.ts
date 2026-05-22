@@ -9,6 +9,7 @@ import {
   type VocabWord,
 } from "@/lib/study/types";
 import { getExampleSentences } from "@/lib/study/example-sentences";
+import random from "random";
 
 const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
   definition_recall: "Definition recall",
@@ -158,7 +159,7 @@ export function buildNextQuestion(
     selected.questionType,
     words,
     optionWords,
-    getQuestionSeed(session),
+    getQuestionSeed(session, selected.word, selected.questionType),
   );
 }
 
@@ -229,7 +230,7 @@ export function buildNextForeverReviewQuestion(
     selected.questionType,
     words,
     optionWords,
-    getQuestionSeed(session),
+    getQuestionSeed(session, selected.word, selected.questionType),
   );
 }
 
@@ -258,7 +259,7 @@ function getForeverReviewWordPriority(word: SessionWordWithWord) {
 
   const attemptScore =
     word.miss_count * 18 + word.guessed_count * 16 - word.correct_count * 2;
-  const freshnessScore = word.last_attempted_at ? 0 : 12;
+  const freshnessScore = word.last_attempted_at ? 0 : 180;
 
   return statusScore + attemptScore + freshnessScore;
 }
@@ -316,7 +317,7 @@ function createQuestion(
   questionType: QuestionType,
   words: SessionWordWithWord[],
   optionWords: VocabWord[],
-  seed: number,
+  seed: string,
 ): StudyQuestion {
   const options = getOptions(target, words, optionWords, questionType, seed);
 
@@ -350,7 +351,6 @@ function createQuestion(
     getExampleSentenceForQuestion(
       target.vocab_word.word,
       target.vocab_word.example_sentence,
-      stableRank(target.vocab_word_id, seed + 31),
     ),
   );
 
@@ -394,36 +394,33 @@ function getOptions(
   words: SessionWordWithWord[],
   optionWords: VocabWord[],
   questionType: QuestionType,
-  seed: number,
+  seed: string,
 ) {
   const sessionOptionWords = words.map((word) => word.vocab_word);
-  const studiedDistractors = sessionOptionWords
-    .filter((word) => word.id !== target.vocab_word_id)
-    .sort(
-      (first, second) =>
-        stableRank(first.id, seed) - stableRank(second.id, seed),
-    )
-    .slice(0, 2);
-  const studiedDistractorIds = new Set(studiedDistractors.map((word) => word.id));
-  const fallbackDistractors = optionWords
-    .filter(
-      (word) =>
-        word.id !== target.vocab_word_id && !studiedDistractorIds.has(word.id),
-    )
-    .sort(
-      (first, second) =>
-        stableRank(first.id, seed + 11) - stableRank(second.id, seed + 11),
-    )
-    .slice(0, 3 - studiedDistractors.length);
-
-  const optionChoices = [
-    target.vocab_word,
-    ...studiedDistractors,
-    ...fallbackDistractors,
-  ].sort(
-    (first, second) =>
-      stableRank(first.id, seed + 17) - stableRank(second.id, seed + 17),
+  const studiedDistractorCandidates = sessionOptionWords.filter(
+    (word) => word.id !== target.vocab_word_id,
   );
+  const studiedDistractors = random
+    .clone(`${seed}:studied-distractors:${target.vocab_word_id}`)
+    .sample(
+      studiedDistractorCandidates,
+      Math.min(2, studiedDistractorCandidates.length),
+    );
+  const studiedDistractorIds = new Set(studiedDistractors.map((word) => word.id));
+  const fallbackDistractorCandidates = optionWords.filter(
+    (word) =>
+      word.id !== target.vocab_word_id && !studiedDistractorIds.has(word.id),
+  );
+  const fallbackDistractors = random
+    .clone(`${seed}:fallback-distractors:${target.vocab_word_id}`)
+    .sample(
+      fallbackDistractorCandidates,
+      Math.min(3 - studiedDistractors.length, fallbackDistractorCandidates.length),
+    );
+
+  const optionChoices = random
+    .clone(`${seed}:option-order:${target.vocab_word_id}:${questionType}`)
+    .shuffle([target.vocab_word, ...studiedDistractors, ...fallbackDistractors]);
 
   return optionChoices.map((word) => ({
     vocabWordId: word.id,
@@ -452,44 +449,31 @@ function blankExampleSentence(
 function getExampleSentenceForQuestion(
   word: string,
   exampleSentence: string,
-  seed: number,
 ) {
   const examples = getExampleSentences(exampleSentence);
   const pattern = getWordPattern(word);
   const blankableExamples = examples.filter((example) => pattern.test(example));
   const choices = blankableExamples.length > 0 ? blankableExamples : examples;
 
-  return choices[Math.abs(seed) % choices.length] ?? "";
+  return random.choice(choices) ?? "";
 }
 
-function stableRank(value: number, seed: number) {
-  let hash = 2166136261;
-
-  hash ^= value;
-  hash = Math.imul(hash, 16777619);
-  hash ^= seed;
-  hash = Math.imul(hash, 16777619);
-  hash ^= hash >>> 16;
-  hash = Math.imul(hash, 2246822507);
-  hash ^= hash >>> 13;
-  hash = Math.imul(hash, 3266489909);
-  hash ^= hash >>> 16;
-
-  return hash >>> 0;
-}
-
-function getQuestionSeed(session: StudySession) {
-  return getStringSeed(session.id) + session.total_questions_answered;
-}
-
-function getStringSeed(value: string) {
-  let seed = 0;
-
-  for (let index = 0; index < value.length; index += 1) {
-    seed = (seed * 31 + value.charCodeAt(index)) % 2147483647;
-  }
-
-  return seed;
+function getQuestionSeed(
+  session: StudySession,
+  word: SessionWordWithWord,
+  questionType: QuestionType,
+) {
+  return [
+    "study-question",
+    session.id,
+    session.total_questions_answered,
+    word.id,
+    word.vocab_word_id,
+    questionType,
+    word.correct_count,
+    word.guessed_count,
+    word.miss_count,
+  ].join(":");
 }
 
 function escapeRegExp(value: string) {

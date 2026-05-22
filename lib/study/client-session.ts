@@ -91,7 +91,7 @@ type SubmitAnswerInput =
   | SubmitMultipleChoiceAnswerInput
   | SubmitTypedAnswerInput;
 
-type SelectedSessionWord = {
+export type SelectedSessionWord = {
   word: VocabWord;
   source: SessionWordSource;
   masteryStatus: UserWordStatus | null;
@@ -374,7 +374,7 @@ export async function startForeverReviewSession(
         ? await reopenForeverReviewSession(supabase, userId, existingSession)
         : existingSession;
 
-    await ensureForeverReviewHasWords(
+    await ensureForeverReviewHasCurrentWords(
       supabase,
       userId,
       repairedSession,
@@ -416,7 +416,7 @@ export async function startForeverReviewSession(
     );
 
     if (racedSession) {
-      await ensureForeverReviewHasWords(
+      await ensureForeverReviewHasCurrentWords(
         supabase,
         userId,
         racedSession,
@@ -1071,29 +1071,42 @@ async function buildSessionView(
   };
 }
 
-async function ensureForeverReviewHasWords(
+async function ensureForeverReviewHasCurrentWords(
   supabase: SupabaseClient,
   userId: string,
   session: StudySession,
   studyDate: string,
 ) {
   const existingWords = await getSessionWords(supabase, userId, session.id);
-
-  if (existingWords.length > 0) {
-    return;
-  }
-
   const selectedWords = await selectWordsForForeverReview(
     supabase,
     userId,
     studyDate,
   );
 
-  if (selectedWords.length === 0) {
+  if (existingWords.length === 0 && selectedWords.length === 0) {
     throw new Error("No previously learned words are available for review yet.");
   }
 
-  await insertForeverReviewWords(supabase, userId, session.id, selectedWords);
+  const missingWords = getMissingForeverReviewSelections(
+    existingWords,
+    selectedWords,
+  );
+
+  if (missingWords.length === 0) {
+    return;
+  }
+
+  const nextPosition =
+    Math.max(...existingWords.map((word) => word.position), -1) + 1;
+
+  await insertForeverReviewWords(
+    supabase,
+    userId,
+    session.id,
+    missingWords,
+    nextPosition,
+  );
 }
 
 async function insertForeverReviewWords(
@@ -1101,10 +1114,11 @@ async function insertForeverReviewWords(
   userId: string,
   sessionId: string,
   selectedWords: SelectedSessionWord[],
+  startPosition = 0,
 ) {
   const sessionWords = selectedWords.map((entry, index) => ({
     ...getInitialForeverReviewWordState(entry),
-    position: index,
+    position: startPosition + index,
     session_id: sessionId,
     user_id: userId,
     vocab_word_id: entry.word.id,
@@ -1115,6 +1129,17 @@ async function insertForeverReviewWords(
     .insert(sessionWords);
 
   assertNoError(error, "Unable to attach review words");
+}
+
+export function getMissingForeverReviewSelections(
+  existingWords: Pick<SessionWordWithWord, "vocab_word_id">[],
+  selectedWords: SelectedSessionWord[],
+) {
+  const existingWordIds = new Set(
+    existingWords.map((word) => word.vocab_word_id),
+  );
+
+  return selectedWords.filter((entry) => !existingWordIds.has(entry.word.id));
 }
 
 async function reopenForeverReviewSession(

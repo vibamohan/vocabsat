@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import random from "random";
 
 import {
   buildNextForeverReviewQuestion,
@@ -339,6 +340,41 @@ describe("daily question building", () => {
 
     expect(correctPositions.size).toBeGreaterThan(1);
   });
+
+  test("varies SAT usage example prompts across repeated builds", () => {
+    const example_sentence = [
+      "The terse reply ended the debate.",
+      "Her terse answer made the point quickly.",
+      "A terse memo can still be polite.",
+      "The judge gave a terse warning.",
+      "His terse style suited the urgent message.",
+    ].join(" | ");
+    const word = sessionWord({
+      satisfied_meaning_recognition: true,
+      satisfied_reverse_recall: true,
+      word: {
+        example_sentence,
+        fast_meaning: "brief",
+        word: "terse",
+      },
+    });
+    const prompts = new Set<string>();
+
+    random.use("sat-usage-example-test");
+
+    try {
+      for (let index = 0; index < 10; index += 1) {
+        const question = buildNextQuestion(studySession(), [word], null);
+
+        expect(question?.questionType).toBe("sat_usage");
+        prompts.add(question?.prompt ?? "");
+      }
+    } finally {
+      random.use(Math.random);
+    }
+
+    expect(prompts.size).toBeGreaterThan(1);
+  });
 });
 
 describe("typed answer grading", () => {
@@ -413,5 +449,34 @@ describe("forever review question building", () => {
     );
 
     expect(question?.targetSessionWordId).toBe("weak-word");
+  });
+
+  test("gives unattempted review words a first pass before attempted weak words", () => {
+    const attemptedWeakWord = sessionWord({
+      id: "attempted-weak-word",
+      last_attempted_at: "2026-05-20T12:05:00.000Z",
+      miss_count: 1,
+      position: 0,
+      source: "review",
+      status: "shaky",
+      vocab_word_id: 1,
+      word: { id: 1 },
+    });
+    const unattemptedReadyWord = satisfiedWord({
+      id: "unattempted-ready-word",
+      last_attempted_at: null,
+      position: 1,
+      source: "review",
+      vocab_word_id: 2,
+      word: { id: 2 },
+    });
+
+    const question = buildNextForeverReviewQuestion(
+      studySession({ session_type: "forever_review" }),
+      [attemptedWeakWord, unattemptedReadyWord],
+      null,
+    );
+
+    expect(question?.targetSessionWordId).toBe("unattempted-ready-word");
   });
 });
