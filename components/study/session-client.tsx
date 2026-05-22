@@ -6,10 +6,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { StudyAppShell } from "@/components/study/app-shell";
 import {
+  AnswerReviewScreen,
   CompletionScreen,
-  CorrectionScreen,
-  DefinitionSelfCheckScreen,
-  GuessCheckScreen,
   LearnScreen,
   QuestionScreen,
 } from "@/components/study/session-screens";
@@ -19,38 +17,32 @@ import {
   advanceLearn,
   getCurrentUser,
   getSessionView,
-  recordGuess,
   replaceKnownLearnWord,
   resetTodaySession,
   submitAnswer,
 } from "@/lib/study/client-session";
-import { gradeTypedAnswer } from "@/lib/study/questions";
 import {
-  applyOptimisticAnswer,
-  applyOptimisticTypedAnswer,
-  applyOptimisticGuess,
+  applyOptimisticAnswerReview,
+  buildMultipleChoiceAnswerReview,
+  buildTypedAnswerReview,
 } from "@/lib/study/optimistic-session";
 import type {
-  AnswerConfidence,
-  CorrectionFeedback,
-  DefinitionSelfGrade,
-  PendingGuess,
+  AnswerReviewGrade,
+  PendingAnswerReview,
   SessionView,
-  SessionWordWithWord,
   StudyQuestion,
 } from "@/lib/study/types";
 import { createClient } from "@/lib/supabase/client";
 
+type QuestionView = Extract<SessionView, { screen: "question" }>;
+
 type SessionMode =
   | { type: "normal" }
-  | { type: "correction"; correction: CorrectionFeedback }
   | {
-      type: "definition_check";
-      question: StudyQuestion;
-      typedAnswer: string;
-      word: SessionWordWithWord;
-    }
-  | { type: "guess"; pendingGuess: PendingGuess };
+      type: "answer_review";
+      review: PendingAnswerReview;
+      sourceView: QuestionView;
+    };
 
 export function SessionClient() {
   const router = useRouter();
@@ -63,8 +55,8 @@ export function SessionClient() {
     null,
   );
   const [view, setView] = useState<SessionView | null>(null);
-  const handledGuessAttemptIdsRef = useRef<Set<string>>(new Set());
   const handledQuestionKeyRef = useRef<string | null>(null);
+  const handledReviewAttemptIdsRef = useRef<Set<string>>(new Set());
   const persistenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const persistenceVersionRef = useRef(0);
 
@@ -94,8 +86,8 @@ export function SessionClient() {
           }
 
           persistenceVersionRef.current += 1;
-          handledGuessAttemptIdsRef.current.clear();
           handledQuestionKeyRef.current = null;
+          handledReviewAttemptIdsRef.current.clear();
           setMode({ type: "normal" });
           setError(getErrorMessage(caughtError, fallbackMessage));
 
@@ -237,26 +229,16 @@ export function SessionClient() {
     handledQuestionKeyRef.current = questionKey;
 
     const attemptId = crypto.randomUUID();
-    const answeredAt = new Date().toISOString();
 
     try {
-      const result = applyOptimisticAnswer(
+      const review = buildMultipleChoiceAnswerReview(
         view,
         question,
         selectedVocabWordId,
         attemptId,
-        answeredAt,
       );
 
-      setView(result.nextView);
-
-      if (result.correction) {
-        setMode({ type: "correction", correction: result.correction });
-      } else if (result.pendingGuess) {
-        setMode({ type: "guess", pendingGuess: result.pendingGuess });
-      } else {
-        setMode({ type: "normal" });
-      }
+      setMode({ type: "answer_review", review, sourceView: view });
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -266,58 +248,11 @@ export function SessionClient() {
       handledQuestionKeyRef.current = null;
       return;
     }
-
-    enqueuePersistence(
-      async () => {
-        await submitAnswer(supabase, user.id, {
-          attemptId,
-          questionType: question.questionType,
-          selectedVocabWordId,
-          sessionWordId: question.targetSessionWordId,
-        });
-      },
-      "Unable to save the answer.",
-    );
   };
 
   const handleTypedAnswer = (
     question: StudyQuestion,
     typedAnswer: string,
-  ) => {
-    if (!user || !view || view.screen !== "question") {
-      return;
-    }
-
-    const targetWord = view.words.find(
-      (word) => word.id === question.targetSessionWordId,
-    );
-
-    if (!targetWord) {
-      setError("Unable to find the active word.");
-      return;
-    }
-
-    if (
-      question.questionType === "definition_recall" &&
-      gradeTypedAnswer(question.questionType, targetWord.vocab_word, typedAnswer) !==
-        "correct"
-    ) {
-      setMode({
-        type: "definition_check",
-        question,
-        typedAnswer,
-        word: targetWord,
-      });
-      return;
-    }
-
-    submitTypedAnswer(question, typedAnswer);
-  };
-
-  const submitTypedAnswer = (
-    question: StudyQuestion,
-    typedAnswer: string,
-    selfGrade?: DefinitionSelfGrade,
   ) => {
     if (!user || !view || view.screen !== "question") {
       return;
@@ -339,23 +274,16 @@ export function SessionClient() {
     handledQuestionKeyRef.current = questionKey;
 
     const attemptId = crypto.randomUUID();
-    const answeredAt = new Date().toISOString();
 
     try {
-      const result = applyOptimisticTypedAnswer(
+      const review = buildTypedAnswerReview(
         view,
         question,
         typedAnswer,
-        answeredAt,
-        selfGrade,
+        attemptId,
       );
 
-      setView(result.nextView);
-      setMode(
-        result.correction
-          ? { type: "correction", correction: result.correction }
-          : { type: "normal" },
-      );
+      setMode({ type: "answer_review", review, sourceView: view });
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -365,60 +293,68 @@ export function SessionClient() {
       handledQuestionKeyRef.current = null;
       return;
     }
-
-    enqueuePersistence(
-      async () => {
-        await submitAnswer(supabase, user.id, {
-          attemptId,
-          questionType: question.questionType,
-          selfGrade,
-          sessionWordId: question.targetSessionWordId,
-          typedAnswer,
-        });
-      },
-      "Unable to save the answer.",
-    );
   };
 
-  const handleCorrectionContinue = () => {
-    setMode({ type: "normal" });
-  };
-
-  const handleGuess = (attemptId: string, confidence: AnswerConfidence) => {
-    if (!user || !view || view.screen !== "question" || mode.type !== "guess") {
+  const handleReviewGrade = (grade: AnswerReviewGrade) => {
+    if (!user || mode.type !== "answer_review") {
       return;
     }
 
-    if (handledGuessAttemptIdsRef.current.has(attemptId)) {
+    if (handledReviewAttemptIdsRef.current.has(mode.review.attemptId)) {
       return;
     }
 
-    handledGuessAttemptIdsRef.current.add(attemptId);
+    handledReviewAttemptIdsRef.current.add(mode.review.attemptId);
     setError(null);
 
     try {
-      setView(
-        applyOptimisticGuess(
-          view,
-          mode.pendingGuess,
-          confidence,
-          new Date().toISOString(),
-        ),
+      const result = applyOptimisticAnswerReview(
+        mode.sourceView,
+        mode.review,
+        grade,
+        new Date().toISOString(),
       );
+      setView(result.nextView);
       setMode({ type: "normal" });
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
           ? caughtError.message
-          : "Unable to check the guess.",
+          : "Unable to check the answer.",
       );
-      handledGuessAttemptIdsRef.current.delete(attemptId);
+      handledQuestionKeyRef.current = null;
+      handledReviewAttemptIdsRef.current.delete(mode.review.attemptId);
       return;
     }
 
     enqueuePersistence(
-      () => recordGuess(supabase, user.id, attemptId, confidence),
-      "Unable to save the guess check.",
+      async () => {
+        if (mode.review.answerMode === "multiple_choice") {
+          const selectedVocabWordId = mode.review.selectedVocabWordId;
+
+          if (!selectedVocabWordId) {
+            throw new Error("Unable to find the selected answer.");
+          }
+
+          await submitAnswer(supabase, user.id, {
+            attemptId: mode.review.attemptId,
+            questionType: mode.review.question.questionType,
+            reviewGrade: grade,
+            selectedVocabWordId,
+            sessionWordId: mode.review.question.targetSessionWordId,
+          });
+          return;
+        }
+
+        await submitAnswer(supabase, user.id, {
+          attemptId: mode.review.attemptId,
+          questionType: mode.review.question.questionType,
+          reviewGrade: grade,
+          sessionWordId: mode.review.question.targetSessionWordId,
+          typedAnswer: mode.review.typedAnswer ?? "",
+        });
+      },
+      "Unable to save the answer.",
     );
   };
 
@@ -439,8 +375,8 @@ export function SessionClient() {
     setIsPending(true);
     setMode({ type: "normal" });
     persistenceVersionRef.current += 1;
-    handledGuessAttemptIdsRef.current.clear();
     handledQuestionKeyRef.current = null;
+    handledReviewAttemptIdsRef.current.clear();
 
     try {
       await resetTodaySession(supabase, user.id);
@@ -510,57 +446,20 @@ export function SessionClient() {
         </>
       ) : null}
 
-      {!isLoading && mode.type === "correction" ? (
-        <CorrectionScreen
-          correction={mode.correction}
+      {!isLoading && mode.type === "answer_review" ? (
+        <AnswerReviewScreen
           isPending={isPending}
-          onContinue={handleCorrectionContinue}
+          onGrade={handleReviewGrade}
           progressContext={
-            view?.screen === "question"
+            mode.sourceView.screen === "question"
               ? {
-                  readyCount: view.readyCount,
+                  readyCount: mode.sourceView.readyCount,
                   variant: "daily",
-                  words: view.words,
+                  words: mode.sourceView.words,
                 }
               : undefined
           }
-        />
-      ) : null}
-
-      {!isLoading && mode.type === "definition_check" ? (
-        <DefinitionSelfCheckScreen
-          isPending={isPending}
-          onGrade={(grade) =>
-            submitTypedAnswer(mode.question, mode.typedAnswer, grade)
-          }
-          progressContext={
-            view?.screen === "question"
-              ? {
-                  readyCount: view.readyCount,
-                  variant: "daily",
-                  words: view.words,
-                }
-              : undefined
-          }
-          typedAnswer={mode.typedAnswer}
-          word={mode.word}
-        />
-      ) : null}
-
-      {!isLoading && mode.type === "guess" ? (
-        <GuessCheckScreen
-          isPending={isPending}
-          onGuess={handleGuess}
-          pendingGuess={mode.pendingGuess}
-          progressContext={
-            view?.screen === "question"
-              ? {
-                  readyCount: view.readyCount,
-                  variant: "daily",
-                  words: view.words,
-                }
-              : undefined
-          }
+          review={mode.review}
         />
       ) : null}
     </StudyAppShell>

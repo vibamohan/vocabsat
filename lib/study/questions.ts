@@ -502,13 +502,12 @@ function gradeDefinitionAnswer(
   const overlapCount = meaningTokens.filter((token) =>
     answerTokens.has(token),
   ).length;
-  const ratio = overlapCount / meaningTokens.length;
 
-  if (overlapCount >= Math.min(2, meaningTokens.length) && ratio >= 0.5) {
+  if (overlapCount > 0) {
     return "correct";
   }
 
-  return overlapCount === 0 ? "incorrect" : "unsure";
+  return "incorrect";
 }
 
 function normalizeWordAnswer(value: string) {

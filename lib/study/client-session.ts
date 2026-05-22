@@ -20,6 +20,7 @@ import {
 import { getStudyProgress } from "@/lib/study/progress";
 import type {
   AnswerConfidence,
+  AnswerReviewGrade,
   DailyWordStatus,
   DefinitionSelfGrade,
   ForeverReviewCheckpoint,
@@ -74,6 +75,7 @@ type AttemptRow = {
 
 type SubmitMultipleChoiceAnswerInput = {
   attemptId: string;
+  reviewGrade?: AnswerReviewGrade;
   sessionWordId: string;
   questionType: QuestionType;
   selectedVocabWordId: number;
@@ -81,6 +83,7 @@ type SubmitMultipleChoiceAnswerInput = {
 
 type SubmitTypedAnswerInput = {
   attemptId: string;
+  reviewGrade?: AnswerReviewGrade;
   sessionWordId: string;
   questionType: QuestionType;
   typedAnswer: string;
@@ -593,6 +596,7 @@ export async function submitAnswer(
 
   const answer = getSubmittedAnswer(input, sessionWord);
   const shouldAskGuess =
+    !input.reviewGrade &&
     answer.isCorrect &&
     answer.answerMode === "multiple_choice" &&
     input.questionType === "sat_usage" &&
@@ -603,7 +607,9 @@ export async function submitAnswer(
     .insert({
       answer_mode: answer.answerMode,
       id: input.attemptId,
-      confidence: answer.isCorrect && !shouldAskGuess ? "known" : null,
+      confidence:
+        answer.confidence ??
+        (answer.isCorrect && !shouldAskGuess ? "known" : null),
       is_correct: answer.isCorrect,
       question_type: input.questionType,
       selected_vocab_word_id: answer.selectedVocabWordId,
@@ -624,7 +630,7 @@ export async function submitAnswer(
 
   await incrementSessionQuestionCount(supabase, userId, session);
 
-  if (!answer.isCorrect) {
+  if (answer.wordOutcome === "incorrect") {
     await markWordMissed(supabase, userId, sessionWord, input.questionType);
     await reconcileCompletionAfterAttempt(supabase, userId, session.id);
 
@@ -648,7 +654,12 @@ export async function submitAnswer(
     };
   }
 
-  await creditKnownAnswer(supabase, userId, sessionWord, input.questionType);
+  if (answer.wordOutcome === "unsure") {
+    await markWordGuessed(supabase, userId, sessionWord, input.questionType);
+  } else {
+    await creditKnownAnswer(supabase, userId, sessionWord, input.questionType);
+  }
+
   await reconcileCompletionAfterAttempt(supabase, userId, session.id);
 
   return { outcome: "continue" };
@@ -690,6 +701,7 @@ export async function submitForeverReviewAnswer(
 
   const answer = getSubmittedAnswer(input, sessionWord);
   const shouldAskGuess =
+    !input.reviewGrade &&
     answer.isCorrect &&
     answer.answerMode === "multiple_choice" &&
     input.questionType === "sat_usage";
@@ -699,7 +711,9 @@ export async function submitForeverReviewAnswer(
     .insert({
       answer_mode: answer.answerMode,
       id: input.attemptId,
-      confidence: answer.isCorrect && !shouldAskGuess ? "known" : null,
+      confidence:
+        answer.confidence ??
+        (answer.isCorrect && !shouldAskGuess ? "known" : null),
       is_correct: answer.isCorrect,
       question_type: input.questionType,
       selected_vocab_word_id: answer.selectedVocabWordId,
@@ -720,7 +734,7 @@ export async function submitForeverReviewAnswer(
 
   await incrementSessionQuestionCount(supabase, userId, session);
 
-  if (!answer.isCorrect) {
+  if (answer.wordOutcome === "incorrect") {
     await markWordMissed(supabase, userId, sessionWord, input.questionType);
 
     return {
@@ -743,7 +757,11 @@ export async function submitForeverReviewAnswer(
     };
   }
 
-  await creditKnownAnswer(supabase, userId, sessionWord, input.questionType);
+  if (answer.wordOutcome === "unsure") {
+    await markWordGuessed(supabase, userId, sessionWord, input.questionType);
+  } else {
+    await creditKnownAnswer(supabase, userId, sessionWord, input.questionType);
+  }
 
   return { outcome: "continue" };
 }
@@ -777,27 +795,79 @@ function getSubmittedAnswer(
   sessionWord: SessionWordWithWord,
 ) {
   if (isMultipleChoiceAnswer(input)) {
+    const systemGrade: AnswerReviewGrade =
+      input.selectedVocabWordId === sessionWord.vocab_word_id
+        ? "correct"
+        : "incorrect";
+    const wordOutcome = getReviewOutcome(systemGrade, input.reviewGrade);
+
     return {
       answerMode: "multiple_choice" as const,
-      isCorrect: input.selectedVocabWordId === sessionWord.vocab_word_id,
+      confidence: getAttemptConfidence(wordOutcome, input.reviewGrade),
+      isCorrect: wordOutcome !== "incorrect",
       selectedVocabWordId: input.selectedVocabWordId,
       typedAnswer: null,
+      wordOutcome,
     };
   }
 
+  const systemGrade = gradeTypedAnswer(
+    input.questionType,
+    sessionWord.vocab_word,
+    input.typedAnswer,
+  );
+  const fallbackGrade: AnswerReviewGrade | undefined = input.selfGrade;
+  const finalReviewGrade = input.reviewGrade ?? fallbackGrade;
+  const wordOutcome = finalReviewGrade
+    ? getReviewOutcome(systemGrade, finalReviewGrade)
+    : systemGrade === "correct"
+      ? "correct"
+      : "incorrect";
+
   return {
     answerMode: "typed" as const,
-    isCorrect:
-      input.selfGrade === "correct" ||
-      (!input.selfGrade &&
-        gradeTypedAnswer(
-          input.questionType,
-          sessionWord.vocab_word,
-          input.typedAnswer,
-        ) === "correct"),
+    confidence: getAttemptConfidence(wordOutcome, input.reviewGrade),
+    isCorrect: wordOutcome !== "incorrect",
     selectedVocabWordId: null,
     typedAnswer: input.typedAnswer,
+    wordOutcome,
   };
+}
+
+function getReviewOutcome(
+  systemGrade: AnswerReviewGrade,
+  reviewGrade?: AnswerReviewGrade,
+): "correct" | "incorrect" | "unsure" {
+  const grade = reviewGrade ?? systemGrade;
+
+  if (grade === "correct") {
+    return "correct";
+  }
+
+  if (grade === "incorrect") {
+    return "incorrect";
+  }
+
+  return systemGrade === "incorrect" ? "incorrect" : "unsure";
+}
+
+function getAttemptConfidence(
+  wordOutcome: "correct" | "incorrect" | "unsure",
+  reviewGrade?: AnswerReviewGrade,
+) {
+  if (!reviewGrade) {
+    return null;
+  }
+
+  if (wordOutcome === "correct") {
+    return "known" satisfies AnswerConfidence;
+  }
+
+  if (wordOutcome === "unsure") {
+    return "guessed" satisfies AnswerConfidence;
+  }
+
+  return null;
 }
 
 function isMultipleChoiceAnswer(

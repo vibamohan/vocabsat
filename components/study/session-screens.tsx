@@ -20,11 +20,13 @@ import { getQuestionTypeLabel } from "@/lib/study/questions";
 import { getStudyProgress, type StudyProgress } from "@/lib/study/progress";
 import type {
   AnswerConfidence,
+  AnswerReviewGrade,
   CorrectionFeedback,
   DefinitionSelfGrade,
   ForeverReviewCheckpoint,
   ForeverReviewSummary,
   ForeverReviewView,
+  PendingAnswerReview,
   PendingGuess,
   StudyQuestion,
   SessionView,
@@ -332,6 +334,130 @@ export function CorrectionScreen({
   );
 }
 
+export function AnswerReviewScreen({
+  isPending,
+  onGrade,
+  progressContext,
+  review,
+}: {
+  isPending?: boolean;
+  onGrade: (grade: AnswerReviewGrade) => void;
+  progressContext?: StudyProgressContext;
+  review: PendingAnswerReview;
+}) {
+  const word = review.targetWord;
+  const acceptedGrade = review.systemGrade;
+  const shouldShowSelectedChoice =
+    review.answerMode === "multiple_choice" && Boolean(review.selectedWord);
+  const shouldShowCorrectWord =
+    review.answerMode === "multiple_choice"
+      ? review.selectedVocabWordId !== word.vocab_word_id
+      : normalizeAnswerText(review.typedAnswer) !==
+        normalizeAnswerText(word.vocab_word.word);
+  const shouldShowMeaningOnly = !shouldShowCorrectWord && !shouldShowSelectedChoice;
+  const canMarkRight = review.systemGrade !== "correct";
+  const canMarkWrong = review.systemGrade !== "incorrect";
+  const canMarkUnsure = review.systemGrade !== "incorrect";
+
+  return (
+    <StudyStage progressContext={progressContext}>
+      <Card className="w-full">
+        <CardHeader>
+          <Badge
+            variant={getReviewBadgeVariant(review.systemGrade)}
+            className={getReviewBadgeClassName(review.systemGrade)}
+          >
+            {getReviewBadgeText(review.systemGrade)}
+          </Badge>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {shouldShowSelectedChoice && review.selectedWord ? (
+            <>
+              <AnswerContrast
+                label="You chose"
+                meaning={review.selectedWord.fast_meaning}
+                word={review.selectedWord.word}
+              />
+            </>
+          ) : null}
+          {review.answerMode === "typed" && review.typedAnswer ? (
+            <>
+              <div className="flex flex-col gap-2">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  You typed
+                </p>
+                <p className="text-lg leading-relaxed">{review.typedAnswer}</p>
+              </div>
+            </>
+          ) : null}
+          {shouldShowCorrectWord ? (
+            <AnswerContrast
+              label="Correct answer"
+              meaning={word.vocab_word.fast_meaning}
+              word={word.vocab_word.word}
+            />
+          ) : null}
+          {shouldShowMeaningOnly ? (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Meaning
+              </p>
+              <p className="leading-relaxed text-muted-foreground">
+                {word.vocab_word.fast_meaning}
+              </p>
+            </div>
+          ) : null}
+        </CardContent>
+        <CardFooter>
+          <div className="flex flex-wrap gap-3">
+            <Button
+              disabled={isPending}
+              onClick={() => onGrade(acceptedGrade)}
+              type="button"
+            >
+              Continue
+              <ArrowRight data-icon="inline-end" />
+            </Button>
+            {canMarkRight ? (
+              <Button
+                disabled={isPending}
+                onClick={() => onGrade("correct")}
+                type="button"
+                variant="outline"
+              >
+                <Check data-icon="inline-start" />
+                Mark right
+              </Button>
+            ) : null}
+            {canMarkWrong ? (
+              <Button
+                disabled={isPending}
+                onClick={() => onGrade("incorrect")}
+                type="button"
+                variant="outline"
+              >
+                <X data-icon="inline-start" />
+                Mark wrong
+              </Button>
+            ) : null}
+            {canMarkUnsure ? (
+              <Button
+                disabled={isPending}
+                onClick={() => onGrade("unsure")}
+                type="button"
+                variant="outline"
+              >
+                <RotateCcw data-icon="inline-start" />
+                Unsure
+              </Button>
+            ) : null}
+          </div>
+        </CardFooter>
+      </Card>
+    </StudyStage>
+  );
+}
+
 function AnswerContrast({
   label,
   meaning,
@@ -352,6 +478,42 @@ function AnswerContrast({
       </div>
     </div>
   );
+}
+
+function getReviewBadgeText(grade: AnswerReviewGrade) {
+  if (grade === "correct") {
+    return "Correct";
+  }
+
+  if (grade === "unsure") {
+    return "Unsure";
+  }
+
+  return "Incorrect";
+}
+
+function getReviewBadgeVariant(grade: AnswerReviewGrade) {
+  if (grade === "incorrect") {
+    return "destructive";
+  }
+
+  if (grade === "unsure") {
+    return "secondary";
+  }
+
+  return "default";
+}
+
+function getReviewBadgeClassName(grade: AnswerReviewGrade) {
+  if (grade === "correct") {
+    return "w-fit border-green-600/20 bg-green-600/10 text-green-700";
+  }
+
+  return "w-fit";
+}
+
+function normalizeAnswerText(value?: string) {
+  return value?.trim().toLowerCase() ?? "";
 }
 
 export function DefinitionSelfCheckScreen({

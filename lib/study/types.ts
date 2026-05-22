@@ -18,6 +18,8 @@ export type CompletionReason = "mastered" | "question_cap" | "manual";
 
 export type AnswerConfidence = "known" | "guessed";
 
+export type AnswerReviewGrade = "correct" | "incorrect" | "unsure";
+
 export type DefinitionSelfGrade = "correct" | "incorrect" | "unsure";
 
 export type TypedAnswerGrade = "correct" | "incorrect" | "unsure";
@@ -103,6 +105,17 @@ export type CorrectionFeedback = {
   answerMode: AnswerMode;
   questionType: QuestionType;
   selectedWord?: VocabWord;
+  targetWord: SessionWordWithWord;
+  typedAnswer?: string;
+};
+
+export type PendingAnswerReview = {
+  answerMode: AnswerMode;
+  attemptId: string;
+  question: StudyQuestion;
+  selectedVocabWordId?: number;
+  selectedWord?: VocabWord;
+  systemGrade: AnswerReviewGrade;
   targetWord: SessionWordWithWord;
   typedAnswer?: string;
 };

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 
 import {
+  AnswerReviewScreen,
   CompletionScreen,
   CorrectionScreen,
   DefinitionSelfCheckScreen,
@@ -13,6 +14,7 @@ import {
   ReviewStartScreen,
 } from "@/components/study/session-screens";
 import type {
+  PendingAnswerReview,
   ForeverReviewSummary,
   PendingGuess,
   SessionView,
@@ -37,6 +39,24 @@ function learnView(): Extract<SessionView, { screen: "learn" }> {
     session: studySession({ phase: "learn" }),
     totalWords: 1,
     words: [word],
+  };
+}
+
+function answerReview(
+  overrides: Partial<PendingAnswerReview> = {},
+): PendingAnswerReview {
+  const view = questionView();
+  const selectedWord = view.words[0].vocab_word;
+
+  return {
+    answerMode: "multiple_choice",
+    attemptId: "attempt-1",
+    question: view.question,
+    selectedVocabWordId: selectedWord.id,
+    selectedWord,
+    systemGrade: "correct",
+    targetWord: view.words[0],
+    ...overrides,
   };
 }
 
@@ -226,6 +246,85 @@ describe("study session screens", () => {
     expect(screen.getByText("Verbose")).toBeInTheDocument();
     expect(screen.getByText("Correct answer")).toBeInTheDocument();
     expect(screen.getAllByText("Terse")).toHaveLength(1);
+  });
+
+  test("continues from a unified correct answer review", async () => {
+    const user = userEvent.setup();
+    const onGrade = vi.fn();
+
+    render(<AnswerReviewScreen onGrade={onGrade} review={answerReview()} />);
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(screen.getByText("Correct")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Mark right" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mark wrong" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Unsure" })).toBeInTheDocument();
+    expect(screen.getAllByText("Terse")).toHaveLength(1);
+    expect(screen.getAllByText("brief")).toHaveLength(1);
+    expect(onGrade).toHaveBeenCalledWith("correct");
+  });
+
+  test("overrides an answer review as wrong", async () => {
+    const user = userEvent.setup();
+    const onGrade = vi.fn();
+
+    render(<AnswerReviewScreen onGrade={onGrade} review={answerReview()} />);
+    await user.click(screen.getByRole("button", { name: "Mark wrong" }));
+
+    expect(onGrade).toHaveBeenCalledWith("incorrect");
+  });
+
+  test("only allows mark right on an incorrect answer review", () => {
+    render(
+      <AnswerReviewScreen
+        onGrade={vi.fn()}
+        review={answerReview({
+          selectedVocabWordId: 2,
+          selectedWord: sessionWord({
+            vocab_word_id: 2,
+            word: { fast_meaning: "detailed", id: 2, word: "verbose" },
+          }).vocab_word,
+          systemGrade: "incorrect",
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Incorrect")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mark right" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Mark wrong" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Unsure" }),
+    ).not.toBeInTheDocument();
+  });
+
+  test("continues from an unsure typed answer review", async () => {
+    const user = userEvent.setup();
+    const onGrade = vi.fn();
+
+    render(
+      <AnswerReviewScreen
+        onGrade={onGrade}
+        review={answerReview({
+          answerMode: "typed",
+          selectedVocabWordId: undefined,
+          selectedWord: undefined,
+          systemGrade: "unsure",
+          typedAnswer: "short",
+        })}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(screen.getAllByText("Unsure").length).toBeGreaterThan(0);
+    expect(screen.getByText("You typed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mark right" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mark wrong" })).toBeInTheDocument();
+    expect(onGrade).toHaveBeenCalledWith("unsure");
   });
 
   test("self-grades a definition recall answer", async () => {

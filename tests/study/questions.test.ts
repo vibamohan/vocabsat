@@ -400,6 +400,13 @@ describe("typed answer grading", () => {
       gradeTypedAnswer(
         "definition_recall",
         vocabWord({ fast_meaning: "brief and clear" }),
+        "brief",
+      ),
+    ).toBe("correct");
+    expect(
+      gradeTypedAnswer(
+        "definition_recall",
+        vocabWord({ fast_meaning: "brief and clear" }),
         "short",
       ),
     ).toBe("incorrect");

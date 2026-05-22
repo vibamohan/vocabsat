@@ -7,12 +7,14 @@ import {
 } from "@/lib/study/questions";
 import type {
   AnswerConfidence,
+  AnswerReviewGrade,
   CorrectionFeedback,
   CompletionReason,
   DailyWordStatus,
   DefinitionSelfGrade,
   ForeverReviewView,
   LatestAttempt,
+  PendingAnswerReview,
   PendingGuess,
   QuestionType,
   SessionStats,
@@ -35,6 +37,124 @@ export type OptimisticForeverReviewAnswerResult = {
   correction?: CorrectionFeedback;
   pendingGuess?: PendingGuess;
 };
+
+export type OptimisticAnswerReviewResult = {
+  nextView: SessionView;
+};
+
+export type OptimisticForeverReviewAnswerReviewResult = {
+  nextView: ForeverReviewView;
+};
+
+export function buildMultipleChoiceAnswerReview(
+  view: QuestionView | ForeverReviewView,
+  question: StudyQuestion,
+  selectedVocabWordId: number,
+  attemptId: string,
+): PendingAnswerReview {
+  const targetWord = getTargetWord(view, question.targetSessionWordId);
+
+  return {
+    answerMode: "multiple_choice",
+    attemptId,
+    question,
+    selectedVocabWordId,
+    selectedWord: getVocabWordById(view, selectedVocabWordId),
+    systemGrade:
+      selectedVocabWordId === question.targetVocabWordId
+        ? "correct"
+        : "incorrect",
+    targetWord,
+  };
+}
+
+export function buildTypedAnswerReview(
+  view: QuestionView | ForeverReviewView,
+  question: StudyQuestion,
+  typedAnswer: string,
+  attemptId: string,
+): PendingAnswerReview {
+  const targetWord = getTargetWord(view, question.targetSessionWordId);
+
+  return {
+    answerMode: "typed",
+    attemptId,
+    question,
+    systemGrade: gradeTypedAnswer(
+      question.questionType,
+      targetWord.vocab_word,
+      typedAnswer,
+    ),
+    targetWord,
+    typedAnswer,
+  };
+}
+
+export function applyOptimisticAnswerReview(
+  view: QuestionView,
+  review: PendingAnswerReview,
+  grade: AnswerReviewGrade,
+  reviewedAt: string,
+): OptimisticAnswerReviewResult {
+  const nextSession = incrementQuestionCount(view.session);
+  const latestAttempt = getLatestAttempt(review.question, reviewedAt);
+  const { words } = updateWord(view.words, review.targetWord.id, (word) =>
+    applyReviewGrade(
+      word,
+      review.question.questionType,
+      review.systemGrade,
+      grade,
+      reviewedAt,
+    ),
+  );
+
+  return {
+    nextView: buildPracticeView(
+      nextSession,
+      words,
+      latestAttempt,
+      reviewedAt,
+      view.optionWords,
+    ),
+  };
+}
+
+export function applyOptimisticForeverReviewAnswerReview(
+  view: ForeverReviewView,
+  review: PendingAnswerReview,
+  grade: AnswerReviewGrade,
+  reviewedAt: string,
+): OptimisticForeverReviewAnswerReviewResult {
+  const nextSession = incrementQuestionCount(view.session);
+  const latestAttempt = getLatestAttempt(review.question, reviewedAt);
+  const targetWord = review.targetWord;
+  const { updatedWord, words } = updateWord(view.words, targetWord.id, (word) =>
+    applyReviewGrade(
+      word,
+      review.question.questionType,
+      review.systemGrade,
+      grade,
+      reviewedAt,
+    ),
+  );
+  const outcome = getReviewOutcome(review.systemGrade, grade);
+
+  return {
+    nextView: buildForeverReviewView(
+      view,
+      nextSession,
+      words,
+      latestAttempt,
+      updateCheckpointAfterReview(
+        view,
+        targetWord,
+        outcome,
+        updatedWord.status === "recall_ready" &&
+          targetWord.status !== "recall_ready",
+      ),
+    ),
+  };
+}
 
 export function applyOptimisticAnswer(
   view: QuestionView,
@@ -531,6 +651,29 @@ function updateCheckpointAfterGuess(
   };
 }
 
+function updateCheckpointAfterReview(
+  view: ForeverReviewView,
+  targetWord: SessionWordWithWord,
+  outcome: "correct" | "incorrect" | "unsure",
+  strengthened: boolean,
+) {
+  const wasAlreadyWeak =
+    targetWord.miss_count > 0 ||
+    targetWord.guessed_count > 0 ||
+    targetWord.status === "shaky";
+
+  return {
+    correctCount:
+      view.checkpoint.correctCount + (outcome === "correct" ? 1 : 0),
+    questionsAnswered: view.checkpoint.questionsAnswered + 1,
+    strengthenedCount:
+      view.checkpoint.strengthenedCount + (strengthened ? 1 : 0),
+    weakWordsFound:
+      view.checkpoint.weakWordsFound +
+      (outcome !== "correct" && !wasAlreadyWeak ? 1 : 0),
+  };
+}
+
 function getCompletionReason(
   session: StudySession,
   words: SessionWordWithWord[],
@@ -663,6 +806,41 @@ function creditKnown(
   };
 }
 
+function applyReviewGrade(
+  word: SessionWordWithWord,
+  questionType: QuestionType,
+  systemGrade: AnswerReviewGrade,
+  grade: AnswerReviewGrade,
+  attemptedAt: string,
+) {
+  const outcome = getReviewOutcome(systemGrade, grade);
+
+  if (outcome === "correct") {
+    return creditKnown(word, questionType, attemptedAt);
+  }
+
+  if (outcome === "unsure") {
+    return markGuessed(word, questionType, attemptedAt);
+  }
+
+  return markMissed(word, questionType, attemptedAt);
+}
+
+function getReviewOutcome(
+  systemGrade: AnswerReviewGrade,
+  grade: AnswerReviewGrade,
+): "correct" | "incorrect" | "unsure" {
+  if (grade === "correct") {
+    return "correct";
+  }
+
+  if (grade === "incorrect") {
+    return "incorrect";
+  }
+
+  return systemGrade === "incorrect" ? "incorrect" : "unsure";
+}
+
 function getSatisfiedUpdate(questionType: QuestionType) {
   if (questionType === "meaning_recognition") {
     return { satisfied_meaning_recognition: true };
@@ -720,4 +898,17 @@ function getVocabWordById(
     view.words.find((word) => word.vocab_word_id === vocabWordId)?.vocab_word ??
     view.optionWords.find((word) => word.id === vocabWordId)
   );
+}
+
+function getTargetWord(
+  view: QuestionView | ForeverReviewView,
+  sessionWordId: string,
+) {
+  const targetWord = view.words.find((word) => word.id === sessionWordId);
+
+  if (!targetWord) {
+    throw new Error("Unable to find the active word.");
+  }
+
+  return targetWord;
 }

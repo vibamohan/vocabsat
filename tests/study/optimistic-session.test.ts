@@ -1,10 +1,14 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  applyOptimisticAnswerReview,
   applyOptimisticAnswer,
+  applyOptimisticForeverReviewAnswerReview,
   applyOptimisticForeverReviewAnswer,
   applyOptimisticForeverReviewGuess,
   applyOptimisticGuess,
+  buildMultipleChoiceAnswerReview,
+  buildTypedAnswerReview,
 } from "@/lib/study/optimistic-session";
 import type {
   ForeverReviewView,
@@ -303,6 +307,144 @@ describe("optimistic daily guess checks", () => {
   });
 });
 
+describe("optimistic daily answer reviews", () => {
+  test("marks an unsure correct multiple-choice answer as shaky", () => {
+    const view = questionView();
+    const review = buildMultipleChoiceAnswerReview(
+      view,
+      view.question,
+      view.question.targetVocabWordId,
+      "attempt-1",
+    );
+
+    const result = applyOptimisticAnswerReview(
+      view,
+      review,
+      "unsure",
+      "2026-05-20T12:10:00.000Z",
+    );
+
+    expect(result.nextView.words[0]).toMatchObject({
+      guessed_count: 1,
+      last_question_type: "meaning_recognition",
+      status: "shaky",
+    });
+  });
+
+  test("credits a marked-right multiple-choice miss", () => {
+    const view = questionView();
+    const review = buildMultipleChoiceAnswerReview(
+      view,
+      view.question,
+      999,
+      "attempt-1",
+    );
+
+    const result = applyOptimisticAnswerReview(
+      view,
+      review,
+      "correct",
+      "2026-05-20T12:10:00.000Z",
+    );
+
+    expect(result.nextView.words[0]).toMatchObject({
+      correct_count: 1,
+      satisfied_meaning_recognition: true,
+      status: "stable",
+    });
+  });
+
+  test("credits a correct word recall answer review", () => {
+    const word = sessionWord({
+      word: { word: "terse" },
+    });
+    const question = studyQuestion({
+      answerMode: "typed",
+      options: [],
+      questionType: "word_recall",
+      targetSessionWordId: word.id,
+      targetVocabWordId: word.vocab_word_id,
+    });
+    const view = questionView({ question, words: [word] });
+    const review = buildTypedAnswerReview(view, question, "terse", "attempt-1");
+
+    const result = applyOptimisticAnswerReview(
+      view,
+      review,
+      review.systemGrade,
+      "2026-05-20T12:10:00.000Z",
+    );
+
+    expect(review.systemGrade).toBe("correct");
+    expect(result.nextView.words[0]).toMatchObject({
+      correct_count: 1,
+      satisfied_word_recall: true,
+      status: "stable",
+    });
+  });
+
+  test("credits a marked-right word recall answer", () => {
+    const word = sessionWord({
+      word: { word: "terse" },
+    });
+    const question = studyQuestion({
+      answerMode: "typed",
+      options: [],
+      questionType: "word_recall",
+      targetSessionWordId: word.id,
+      targetVocabWordId: word.vocab_word_id,
+    });
+    const view = questionView({ question, words: [word] });
+    const review = buildTypedAnswerReview(view, question, "tersee", "attempt-1");
+
+    const result = applyOptimisticAnswerReview(
+      view,
+      review,
+      "correct",
+      "2026-05-20T12:10:00.000Z",
+    );
+
+    expect(review.systemGrade).toBe("incorrect");
+    expect(result.nextView.words[0]).toMatchObject({
+      correct_count: 1,
+      satisfied_word_recall: true,
+      status: "stable",
+    });
+  });
+
+  test("credits a one-token definition answer review", () => {
+    const word = sessionWord({
+      word: {
+        fast_meaning: "quietly skilled",
+        word: "adroit",
+      },
+    });
+    const question = studyQuestion({
+      answerMode: "typed",
+      options: [],
+      questionType: "definition_recall",
+      targetSessionWordId: word.id,
+      targetVocabWordId: word.vocab_word_id,
+    });
+    const view = questionView({ question, words: [word] });
+    const review = buildTypedAnswerReview(view, question, "quietly", "attempt-1");
+
+    const result = applyOptimisticAnswerReview(
+      view,
+      review,
+      review.systemGrade,
+      "2026-05-20T12:10:00.000Z",
+    );
+
+    expect(review.systemGrade).toBe("correct");
+    expect(result.nextView.words[0]).toMatchObject({
+      correct_count: 1,
+      satisfied_definition_recall: true,
+      status: "stable",
+    });
+  });
+});
+
 describe("optimistic forever review", () => {
   test("tracks correct answers in the checkpoint", () => {
     const view = foreverReviewView({
@@ -404,5 +546,50 @@ describe("optimistic forever review", () => {
 
     expect(nextView.checkpoint.strengthenedCount).toBe(1);
     expect(nextView.words[0].status).toBe("recall_ready");
+  });
+
+  test("tracks checkpoint stats after a finalized answer review", () => {
+    const view = foreverReviewView({
+      words: [
+        sessionWord({
+          id: "target",
+          source: "review",
+          status: "shaky",
+          vocab_word_id: 1,
+          word: { id: 1 },
+        }),
+        sessionWord({
+          id: "next",
+          source: "review",
+          status: "shaky",
+          vocab_word_id: 2,
+          word: { id: 2 },
+        }),
+      ],
+    });
+    const question = studyQuestion({
+      questionType: "meaning_recognition",
+      targetSessionWordId: "target",
+      targetVocabWordId: 1,
+    });
+    const review = buildMultipleChoiceAnswerReview(
+      { ...view, question },
+      question,
+      1,
+      "attempt-1",
+    );
+
+    const result = applyOptimisticForeverReviewAnswerReview(
+      { ...view, question },
+      review,
+      "correct",
+      "2026-05-20T12:10:00.000Z",
+    );
+
+    expect(result.nextView.checkpoint).toMatchObject({
+      correctCount: 1,
+      questionsAnswered: 1,
+      weakWordsFound: 0,
+    });
   });
 });

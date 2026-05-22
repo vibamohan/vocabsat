@@ -6,9 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { StudyAppShell } from "@/components/study/app-shell";
 import {
-  CorrectionScreen,
-  DefinitionSelfCheckScreen,
-  GuessCheckScreen,
+  AnswerReviewScreen,
   QuestionScreen,
   ReviewCheckpointScreen,
   ReviewStartScreen,
@@ -19,24 +17,19 @@ import {
   getCurrentUser,
   getForeverReviewSummary,
   getForeverReviewView,
-  recordForeverReviewGuess,
   submitForeverReviewAnswer,
 } from "@/lib/study/client-session";
 import { FOREVER_REVIEW_CHECKPOINT_INTERVAL } from "@/lib/study/config";
-import { gradeTypedAnswer } from "@/lib/study/questions";
 import {
-  applyOptimisticForeverReviewAnswer,
-  applyOptimisticForeverReviewTypedAnswer,
-  applyOptimisticForeverReviewGuess,
+  applyOptimisticForeverReviewAnswerReview,
+  buildMultipleChoiceAnswerReview,
+  buildTypedAnswerReview,
 } from "@/lib/study/optimistic-session";
 import type {
-  AnswerConfidence,
-  CorrectionFeedback,
-  DefinitionSelfGrade,
+  AnswerReviewGrade,
   ForeverReviewSummary,
   ForeverReviewView,
-  PendingGuess,
-  SessionWordWithWord,
+  PendingAnswerReview,
   StudyQuestion,
 } from "@/lib/study/types";
 import { createClient } from "@/lib/supabase/client";
@@ -44,14 +37,11 @@ import { createClient } from "@/lib/supabase/client";
 type ReviewMode =
   | { type: "start" }
   | { type: "normal" }
-  | { type: "correction"; correction: CorrectionFeedback }
   | {
-      type: "definition_check";
-      question: StudyQuestion;
-      typedAnswer: string;
-      word: SessionWordWithWord;
+      type: "answer_review";
+      review: PendingAnswerReview;
+      sourceView: ForeverReviewView;
     }
-  | { type: "guess"; pendingGuess: PendingGuess }
   | { type: "checkpoint" };
 
 export function ReviewClient() {
@@ -67,8 +57,8 @@ export function ReviewClient() {
   );
   const [view, setView] = useState<ForeverReviewView | null>(null);
   const dismissedCheckpointRef = useRef<number | null>(null);
-  const handledGuessAttemptIdsRef = useRef<Set<string>>(new Set());
   const handledQuestionKeyRef = useRef<string | null>(null);
+  const handledReviewAttemptIdsRef = useRef<Set<string>>(new Set());
   const persistenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const persistenceVersionRef = useRef(0);
 
@@ -111,8 +101,8 @@ export function ReviewClient() {
           }
 
           persistenceVersionRef.current += 1;
-          handledGuessAttemptIdsRef.current.clear();
           handledQuestionKeyRef.current = null;
+          handledReviewAttemptIdsRef.current.clear();
           setError(getErrorMessage(caughtError, fallbackMessage));
 
           try {
@@ -200,45 +190,21 @@ export function ReviewClient() {
     handledQuestionKeyRef.current = questionKey;
 
     const attemptId = crypto.randomUUID();
-    const answeredAt = new Date().toISOString();
 
     try {
-      const result = applyOptimisticForeverReviewAnswer(
+      const review = buildMultipleChoiceAnswerReview(
         view,
         question,
         selectedVocabWordId,
         attemptId,
-        answeredAt,
       );
 
-      setView(result.nextView);
-
-      if (result.correction) {
-        setMode({ type: "correction", correction: result.correction });
-      } else if (result.pendingGuess) {
-        setMode({ type: "guess", pendingGuess: result.pendingGuess });
-      } else if (shouldShowCheckpoint(result.nextView)) {
-        setMode({ type: "checkpoint" });
-      } else {
-        setMode({ type: "normal" });
-      }
+      setMode({ type: "answer_review", review, sourceView: view });
     } catch (caughtError) {
       setError(getErrorMessage(caughtError, "Unable to check the answer."));
       handledQuestionKeyRef.current = null;
       return;
     }
-
-    enqueuePersistence(
-      async () => {
-        await submitForeverReviewAnswer(supabase, user.id, {
-          attemptId,
-          questionType: question.questionType,
-          selectedVocabWordId,
-          sessionWordId: question.targetSessionWordId,
-        });
-      },
-      "Unable to save the review answer.",
-    );
   };
 
   const handleTypedAnswer = (
@@ -246,41 +212,6 @@ export function ReviewClient() {
     typedAnswer: string,
   ) => {
     if (!user || !view || mode.type !== "normal") {
-      return;
-    }
-
-    const targetWord = view.words.find(
-      (word) => word.id === question.targetSessionWordId,
-    );
-
-    if (!targetWord) {
-      setError("Unable to find the active word.");
-      return;
-    }
-
-    if (
-      question.questionType === "definition_recall" &&
-      gradeTypedAnswer(question.questionType, targetWord.vocab_word, typedAnswer) !==
-        "correct"
-    ) {
-      setMode({
-        type: "definition_check",
-        question,
-        typedAnswer,
-        word: targetWord,
-      });
-      return;
-    }
-
-    submitTypedAnswer(question, typedAnswer);
-  };
-
-  const submitTypedAnswer = (
-    question: StudyQuestion,
-    typedAnswer: string,
-    selfGrade?: DefinitionSelfGrade,
-  ) => {
-    if (!user || !view) {
       return;
     }
 
@@ -300,86 +231,84 @@ export function ReviewClient() {
     handledQuestionKeyRef.current = questionKey;
 
     const attemptId = crypto.randomUUID();
-    const answeredAt = new Date().toISOString();
 
     try {
-      const result = applyOptimisticForeverReviewTypedAnswer(
+      const review = buildTypedAnswerReview(
         view,
         question,
         typedAnswer,
-        answeredAt,
-        selfGrade,
+        attemptId,
       );
 
-      setView(result.nextView);
-
-      if (result.correction) {
-        setMode({ type: "correction", correction: result.correction });
-      } else if (shouldShowCheckpoint(result.nextView)) {
-        setMode({ type: "checkpoint" });
-      } else {
-        setMode({ type: "normal" });
-      }
+      setMode({ type: "answer_review", review, sourceView: view });
     } catch (caughtError) {
       setError(getErrorMessage(caughtError, "Unable to check the answer."));
       handledQuestionKeyRef.current = null;
       return;
     }
-
-    enqueuePersistence(
-      async () => {
-        await submitForeverReviewAnswer(supabase, user.id, {
-          attemptId,
-          questionType: question.questionType,
-          selfGrade,
-          sessionWordId: question.targetSessionWordId,
-          typedAnswer,
-        });
-      },
-      "Unable to save the review answer.",
-    );
   };
 
-  const handleCorrectionContinue = () => {
-    if (view && shouldShowCheckpoint(view)) {
-      setMode({ type: "checkpoint" });
+  const handleReviewGrade = (grade: AnswerReviewGrade) => {
+    if (!user || mode.type !== "answer_review") {
       return;
     }
 
-    setMode({ type: "normal" });
-  };
-
-  const handleGuess = (attemptId: string, confidence: AnswerConfidence) => {
-    if (!user || !view || mode.type !== "guess") {
+    if (handledReviewAttemptIdsRef.current.has(mode.review.attemptId)) {
       return;
     }
 
-    if (handledGuessAttemptIdsRef.current.has(attemptId)) {
-      return;
-    }
-
-    handledGuessAttemptIdsRef.current.add(attemptId);
+    handledReviewAttemptIdsRef.current.add(mode.review.attemptId);
     setError(null);
 
     try {
-      const nextView = applyOptimisticForeverReviewGuess(
-        view,
-        mode.pendingGuess,
-        confidence,
+      const result = applyOptimisticForeverReviewAnswerReview(
+        mode.sourceView,
+        mode.review,
+        grade,
         new Date().toISOString(),
       );
 
-      setView(nextView);
-      setMode(shouldShowCheckpoint(nextView) ? { type: "checkpoint" } : { type: "normal" });
+      setView(result.nextView);
+      setMode(
+        shouldShowCheckpoint(result.nextView)
+          ? { type: "checkpoint" }
+          : { type: "normal" },
+      );
     } catch (caughtError) {
-      setError(getErrorMessage(caughtError, "Unable to save the guess check."));
-      handledGuessAttemptIdsRef.current.delete(attemptId);
+      setError(getErrorMessage(caughtError, "Unable to check the answer."));
+      handledQuestionKeyRef.current = null;
+      handledReviewAttemptIdsRef.current.delete(mode.review.attemptId);
       return;
     }
 
     enqueuePersistence(
-      () => recordForeverReviewGuess(supabase, user.id, attemptId, confidence),
-      "Unable to save the review guess check.",
+      async () => {
+        if (mode.review.answerMode === "multiple_choice") {
+          const selectedVocabWordId = mode.review.selectedVocabWordId;
+
+          if (!selectedVocabWordId) {
+            throw new Error("Unable to find the selected answer.");
+          }
+
+          await submitForeverReviewAnswer(supabase, user.id, {
+            attemptId: mode.review.attemptId,
+            questionType: mode.review.question.questionType,
+            reviewGrade: grade,
+            selectedVocabWordId,
+            sessionWordId: mode.review.question.targetSessionWordId,
+          });
+          return;
+        }
+
+        await submitForeverReviewAnswer(supabase, user.id, {
+          attemptId: mode.review.attemptId,
+          questionType: mode.review.question.questionType,
+          reviewGrade: grade,
+          sessionWordId: mode.review.question.targetSessionWordId,
+          typedAnswer: mode.review.typedAnswer ?? "",
+        });
+      },
+      "Unable to save the review answer.",
     );
   };
 
@@ -432,60 +361,22 @@ export function ReviewClient() {
         />
       ) : null}
 
-      {!isLoading && mode.type === "correction" ? (
-        <CorrectionScreen
-          correction={mode.correction}
+      {!isLoading && mode.type === "answer_review" ? (
+        <AnswerReviewScreen
           isPending={isPending}
-          onContinue={handleCorrectionContinue}
+          onGrade={handleReviewGrade}
           progressContext={
-            view
+            mode.sourceView
               ? {
-                  readyCount: view.readyCount,
-                  strengthenedCount: view.checkpoint.strengthenedCount,
+                  readyCount: mode.sourceView.readyCount,
+                  strengthenedCount:
+                    mode.sourceView.checkpoint.strengthenedCount,
                   variant: "review",
-                  words: view.words,
+                  words: mode.sourceView.words,
                 }
               : undefined
           }
-        />
-      ) : null}
-
-      {!isLoading && mode.type === "definition_check" ? (
-        <DefinitionSelfCheckScreen
-          isPending={isPending}
-          onGrade={(grade) =>
-            submitTypedAnswer(mode.question, mode.typedAnswer, grade)
-          }
-          progressContext={
-            view
-              ? {
-                  readyCount: view.readyCount,
-                  strengthenedCount: view.checkpoint.strengthenedCount,
-                  variant: "review",
-                  words: view.words,
-                }
-              : undefined
-          }
-          typedAnswer={mode.typedAnswer}
-          word={mode.word}
-        />
-      ) : null}
-
-      {!isLoading && mode.type === "guess" ? (
-        <GuessCheckScreen
-          isPending={isPending}
-          onGuess={handleGuess}
-          pendingGuess={mode.pendingGuess}
-          progressContext={
-            view
-              ? {
-                  readyCount: view.readyCount,
-                  strengthenedCount: view.checkpoint.strengthenedCount,
-                  variant: "review",
-                  words: view.words,
-                }
-              : undefined
-          }
+          review={mode.review}
         />
       ) : null}
 
