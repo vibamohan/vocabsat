@@ -7,6 +7,7 @@ import {
   MAX_DAILY_REVIEW_WORD_COUNT,
   QUESTION_CAP,
   QUESTION_CAP_PER_WORD,
+  RECENT_WORD_COOLDOWN_COUNT,
   REVIEW_INTERVAL_DAYS,
 } from "@/lib/study/config";
 import { addDaysToStudyDate, getStudyDate } from "@/lib/study/dates";
@@ -71,6 +72,10 @@ type AttemptRow = {
   is_correct: boolean;
   confidence: AnswerConfidence | null;
   created_at: string;
+};
+
+type SeenWordRow = {
+  vocab_word_id: number;
 };
 
 type SubmitMultipleChoiceAnswerInput = {
@@ -447,12 +452,12 @@ export async function getForeverReviewView(
 ): Promise<ForeverReviewView> {
   const session = await startForeverReviewSession(supabase, userId);
   const words = await getSessionWords(supabase, userId, session.id);
-  const latestAttempt = await getLatestAttempt(supabase, session.id);
+  const recentAttempts = await getRecentAttempts(supabase, session.id);
   const optionWords = await getQuestionOptionWords(supabase);
   const question = buildNextForeverReviewQuestion(
     session,
     words,
-    latestAttempt,
+    recentAttempts,
     optionWords,
   );
 
@@ -466,6 +471,7 @@ export async function getForeverReviewView(
     optionWords,
     question,
     readyCount: getReadyCount(words),
+    recentAttempts,
     screen: "question",
     session,
     totalWords: words.length,
@@ -581,12 +587,12 @@ export async function submitAnswer(
   }
 
   const words = await getSessionWords(supabase, userId, session.id);
-  const latestAttempt = await getLatestAttempt(supabase, session.id);
+  const recentAttempts = await getRecentAttempts(supabase, session.id);
   const optionWords = await getQuestionOptionWords(supabase);
   const currentQuestion = buildNextQuestion(
     session,
     words,
-    latestAttempt,
+    recentAttempts,
     optionWords,
   );
 
@@ -686,12 +692,12 @@ export async function submitForeverReviewAnswer(
   }
 
   const words = await getSessionWords(supabase, userId, session.id);
-  const latestAttempt = await getLatestAttempt(supabase, session.id);
+  const recentAttempts = await getRecentAttempts(supabase, session.id);
   const optionWords = await getQuestionOptionWords(supabase);
   const currentQuestion = buildNextForeverReviewQuestion(
     session,
     words,
-    latestAttempt,
+    recentAttempts,
     optionWords,
   );
 
@@ -1110,9 +1116,9 @@ async function buildSessionView(
     return buildSessionView(supabase, userId, practiceSession, words);
   }
 
-  const latestAttempt = await getLatestAttempt(supabase, session.id);
+  const recentAttempts = await getRecentAttempts(supabase, session.id);
   const optionWords = await getQuestionOptionWords(supabase);
-  const question = buildNextQuestion(session, words, latestAttempt, optionWords);
+  const question = buildNextQuestion(session, words, recentAttempts, optionWords);
 
   if (!question) {
     const completedSession = await completeSession(
@@ -1135,6 +1141,7 @@ async function buildSessionView(
     question,
     optionWords,
     readyCount: getReadyCount(words),
+    recentAttempts,
     session,
     totalWords: words.length,
     words,
@@ -1399,21 +1406,20 @@ async function getAttemptById(
   return requireRow<AttemptRow>(data, error, "Unable to load the attempt");
 }
 
-async function getLatestAttempt(
+async function getRecentAttempts(
   supabase: SupabaseClient,
   sessionId: string,
-): Promise<LatestAttempt | null> {
+): Promise<LatestAttempt[]> {
   const { data, error } = await supabase
     .from("study_question_attempts")
     .select("session_word_id, question_type, created_at")
     .eq("session_id", sessionId)
     .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(RECENT_WORD_COOLDOWN_COUNT);
 
-  assertNoError(error, "Unable to load the latest attempt");
+  assertNoError(error, "Unable to load recent attempts");
 
-  return data as LatestAttempt | null;
+  return (data ?? []) as LatestAttempt[];
 }
 
 async function selectWordsForToday(
@@ -1424,6 +1430,7 @@ async function selectWordsForToday(
 ): Promise<SelectedSessionWord[]> {
   const [
     { data: masteryData, error: masteryError },
+    { data: seenSessionWordData, error: seenSessionWordError },
     { data: wordData, error: wordError },
   ] = await Promise.all([
     supabase
@@ -1433,15 +1440,21 @@ async function selectWordsForToday(
       )
       .eq("user_id", userId),
     supabase
+      .from("study_session_words")
+      .select("vocab_word_id")
+      .eq("user_id", userId),
+    supabase
       .from("vocab_words")
       .select("id, word, fast_meaning, example_sentence, sort_order")
       .order("sort_order", { ascending: true }),
   ]);
 
   assertNoError(masteryError, "Unable to load prior word mastery");
+  assertNoError(seenSessionWordError, "Unable to load prior session words");
   assertNoError(wordError, "Unable to load vocabulary words");
 
   const masteryRows = (masteryData ?? []) as MasteryRow[];
+  const seenSessionWordRows = (seenSessionWordData ?? []) as SeenWordRow[];
   const words = (wordData ?? []) as VocabWord[];
   const wordsById = new Map(words.map((word) => [word.id, word]));
   const wordOrderRankById = new Map<number, number>(
@@ -1453,7 +1466,7 @@ async function selectWordsForToday(
   const wordsByUserOrder = [...words].sort((first, second) =>
     compareWordsByUserOrder(first, second, wordOrderRankById),
   );
-  const seenWordIds = new Set(masteryRows.map((row) => row.vocab_word_id));
+  const seenWordIds = getSeenVocabWordIds(masteryRows, seenSessionWordRows);
   const selected = new Map<number, SelectedSessionWord>();
 
   masteryRows
@@ -1499,20 +1512,22 @@ async function selectWordsForToday(
       }
     });
 
-  for (const word of wordsByUserOrder) {
+  for (const word of getUnseenWordsByUserOrder(
+    wordsByUserOrder,
+    seenWordIds,
+    selected,
+  )) {
     const newWordCount = getSelectedSourceCount(selected, "new");
 
     if (newWordCount >= limit) {
       break;
     }
 
-    if (!seenWordIds.has(word.id)) {
-      selected.set(word.id, {
-        masteryStatus: null,
-        source: "new",
-        word,
-      });
-    }
+    selected.set(word.id, {
+      masteryStatus: null,
+      source: "new",
+      word,
+    });
   }
 
   return Array.from(selected.values());
@@ -1525,10 +1540,15 @@ async function getNextReplacementWord(
 ): Promise<VocabWord | null> {
   const [
     { data: masteryData, error: masteryError },
+    { data: seenSessionWordData, error: seenSessionWordError },
     { data: wordData, error: wordError },
   ] = await Promise.all([
     supabase
       .from("user_word_mastery")
+      .select("vocab_word_id")
+      .eq("user_id", userId),
+    supabase
+      .from("study_session_words")
       .select("vocab_word_id")
       .eq("user_id", userId),
     supabase
@@ -1538,16 +1558,16 @@ async function getNextReplacementWord(
   ]);
 
   assertNoError(masteryError, "Unable to load prior word mastery");
+  assertNoError(seenSessionWordError, "Unable to load prior session words");
   assertNoError(wordError, "Unable to load vocabulary words");
 
   const words = (wordData ?? []) as VocabWord[];
   const sessionWordIds = new Set(
     sessionWords.map((word) => word.vocab_word_id),
   );
-  const seenWordIds = new Set(
-    ((masteryData ?? []) as Array<{ vocab_word_id: number }>).map(
-      (row) => row.vocab_word_id,
-    ),
+  const seenWordIds = getSeenVocabWordIds(
+    (masteryData ?? []) as SeenWordRow[],
+    (seenSessionWordData ?? []) as SeenWordRow[],
   );
   const wordOrderRankById = new Map<number, number>(
     words.map((word): [number, number] => [
@@ -1557,13 +1577,33 @@ async function getNextReplacementWord(
   );
 
   return (
-    [...words]
-      .sort((first, second) =>
+    getUnseenWordsByUserOrder(
+      [...words].sort((first, second) =>
         compareWordsByUserOrder(first, second, wordOrderRankById),
-      )
-      .find(
-        (word) => !sessionWordIds.has(word.id) && !seenWordIds.has(word.id),
-      ) ?? null
+      ),
+      seenWordIds,
+      sessionWordIds,
+    )[0] ?? null
+  );
+}
+
+export function getSeenVocabWordIds(
+  masteryRows: SeenWordRow[],
+  sessionWordRows: SeenWordRow[],
+) {
+  return new Set([
+    ...masteryRows.map((row) => row.vocab_word_id),
+    ...sessionWordRows.map((row) => row.vocab_word_id),
+  ]);
+}
+
+export function getUnseenWordsByUserOrder(
+  wordsByUserOrder: VocabWord[],
+  seenWordIds: Set<number>,
+  excludedWordIds: Set<number> | Map<number, unknown> = new Set(),
+) {
+  return wordsByUserOrder.filter(
+    (word) => !seenWordIds.has(word.id) && !excludedWordIds.has(word.id),
   );
 }
 

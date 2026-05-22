@@ -246,6 +246,38 @@ describe("daily question building", () => {
     expect(question?.targetSessionWordId).toBe("second-word");
   });
 
+  test("keeps recently attempted weak words behind uncooled words", () => {
+    const recentWeakWord = sessionWord({
+      id: "recent-weak-word",
+      last_attempted_at: "2026-05-20T12:08:00.000Z",
+      miss_count: 4,
+      position: 0,
+      status: "shaky",
+      vocab_word_id: 1,
+      word: { id: 1 },
+    });
+    const uncooledWord = sessionWord({
+      id: "uncooled-word",
+      position: 1,
+      vocab_word_id: 2,
+      word: { id: 2 },
+    });
+
+    const question = buildNextQuestion(
+      studySession(),
+      [recentWeakWord, uncooledWord],
+      [
+        {
+          created_at: "2026-05-20T12:08:00.000Z",
+          question_type: "meaning_recognition",
+          session_word_id: "recent-weak-word",
+        },
+      ],
+    );
+
+    expect(question?.targetSessionWordId).toBe("uncooled-word");
+  });
+
   test("fills options with unique distractors", () => {
     const target = sessionWord({
       vocab_word_id: 1,
@@ -485,5 +517,76 @@ describe("forever review question building", () => {
     );
 
     expect(question?.targetSessionWordId).toBe("unattempted-ready-word");
+  });
+
+  test("does not alternate between two recent weak words when another review word is available", () => {
+    const firstWeakWord = sessionWord({
+      id: "first-weak-word",
+      last_attempted_at: "2026-05-20T12:10:00.000Z",
+      miss_count: 4,
+      position: 0,
+      source: "review",
+      status: "shaky",
+      vocab_word_id: 1,
+      word: { id: 1 },
+    });
+    const secondWeakWord = sessionWord({
+      id: "second-weak-word",
+      last_attempted_at: "2026-05-20T12:09:00.000Z",
+      miss_count: 4,
+      position: 1,
+      source: "review",
+      status: "shaky",
+      vocab_word_id: 2,
+      word: { id: 2 },
+    });
+    const readyWord = satisfiedWord({
+      id: "ready-word",
+      last_attempted_at: "2026-05-20T11:50:00.000Z",
+      position: 2,
+      source: "review",
+      vocab_word_id: 3,
+      word: { id: 3 },
+    });
+
+    const question = buildNextForeverReviewQuestion(
+      studySession({ session_type: "forever_review" }),
+      [firstWeakWord, secondWeakWord, readyWord],
+      [
+        {
+          created_at: "2026-05-20T12:10:00.000Z",
+          question_type: "meaning_recognition",
+          session_word_id: "first-weak-word",
+        },
+        {
+          created_at: "2026-05-20T12:09:00.000Z",
+          question_type: "meaning_recognition",
+          session_word_id: "second-weak-word",
+        },
+      ],
+    );
+
+    expect(question?.targetSessionWordId).toBe("ready-word");
+  });
+
+  test("falls back to cooled review words when every candidate is recent", () => {
+    const onlyWord = satisfiedWord({
+      id: "only-word",
+      source: "review",
+    });
+
+    const question = buildNextForeverReviewQuestion(
+      studySession({ session_type: "forever_review" }),
+      [onlyWord],
+      [
+        {
+          created_at: "2026-05-20T12:10:00.000Z",
+          question_type: "meaning_recognition",
+          session_word_id: "only-word",
+        },
+      ],
+    );
+
+    expect(question?.targetSessionWordId).toBe("only-word");
   });
 });

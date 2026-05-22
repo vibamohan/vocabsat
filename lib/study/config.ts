@@ -7,6 +7,7 @@ export const MAX_DAILY_REVIEW_WORD_COUNT = 6;
 export const QUESTION_CAP_PER_WORD = 6;
 export const FOREVER_REVIEW_CHECKPOINT_INTERVAL = 10;
 export const FOREVER_REVIEW_STALE_DAYS = 30;
+export const RECENT_WORD_COOLDOWN_COUNT = 3;
 export const REVIEW_INTERVAL_DAYS = [1, 3, 7, 14, 30, 60] as const;
 export const DEFAULT_STUDY_TIME_ZONE = "America/Los_Angeles";
 

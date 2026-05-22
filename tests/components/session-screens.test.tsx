@@ -84,6 +84,7 @@ function questionView(): Extract<SessionView, { screen: "question" }> {
     optionWords: [word.vocab_word],
     question,
     readyCount: 0,
+    recentAttempts: [],
     screen: "question",
     session: studySession(),
     totalWords: 1,

@@ -5,6 +5,7 @@ import {
   gradeTypedAnswer,
   isRecallReady,
 } from "@/lib/study/questions";
+import { RECENT_WORD_COOLDOWN_COUNT } from "@/lib/study/config";
 import type {
   AnswerConfidence,
   AnswerReviewGrade,
@@ -98,6 +99,7 @@ export function applyOptimisticAnswerReview(
 ): OptimisticAnswerReviewResult {
   const nextSession = incrementQuestionCount(view.session);
   const latestAttempt = getLatestAttempt(review.question, reviewedAt);
+  const recentAttempts = prependRecentAttempt(view.recentAttempts, latestAttempt);
   const { words } = updateWord(view.words, review.targetWord.id, (word) =>
     applyReviewGrade(
       word,
@@ -112,7 +114,7 @@ export function applyOptimisticAnswerReview(
     nextView: buildPracticeView(
       nextSession,
       words,
-      latestAttempt,
+      recentAttempts,
       reviewedAt,
       view.optionWords,
     ),
@@ -127,6 +129,7 @@ export function applyOptimisticForeverReviewAnswerReview(
 ): OptimisticForeverReviewAnswerReviewResult {
   const nextSession = incrementQuestionCount(view.session);
   const latestAttempt = getLatestAttempt(review.question, reviewedAt);
+  const recentAttempts = prependRecentAttempt(view.recentAttempts, latestAttempt);
   const targetWord = review.targetWord;
   const { updatedWord, words } = updateWord(view.words, targetWord.id, (word) =>
     applyReviewGrade(
@@ -144,7 +147,7 @@ export function applyOptimisticForeverReviewAnswerReview(
       view,
       nextSession,
       words,
-      latestAttempt,
+      recentAttempts,
       updateCheckpointAfterReview(
         view,
         targetWord,
@@ -173,6 +176,7 @@ export function applyOptimisticAnswer(
 
   const nextSession = incrementQuestionCount(view.session);
   const latestAttempt = getLatestAttempt(question, answeredAt);
+  const recentAttempts = prependRecentAttempt(view.recentAttempts, latestAttempt);
   const isCorrect = selectedVocabWordId === question.targetVocabWordId;
   const shouldAskGuess =
     isCorrect &&
@@ -194,7 +198,7 @@ export function applyOptimisticAnswer(
       nextView: buildPracticeView(
         nextSession,
         words,
-        latestAttempt,
+        recentAttempts,
         answeredAt,
         view.optionWords,
       ),
@@ -209,6 +213,7 @@ export function applyOptimisticAnswer(
     return {
       nextView: {
         ...view,
+        recentAttempts,
         session: nextSession,
         words,
       },
@@ -228,7 +233,7 @@ export function applyOptimisticAnswer(
     nextView: buildPracticeView(
       nextSession,
       words,
-      latestAttempt,
+      recentAttempts,
       answeredAt,
       view.optionWords,
     ),
@@ -252,6 +257,7 @@ export function applyOptimisticTypedAnswer(
 
   const nextSession = incrementQuestionCount(view.session);
   const latestAttempt = getLatestAttempt(question, answeredAt);
+  const recentAttempts = prependRecentAttempt(view.recentAttempts, latestAttempt);
   const isCorrect = isTypedAnswerCorrect(
     question,
     targetWord,
@@ -274,7 +280,7 @@ export function applyOptimisticTypedAnswer(
       nextView: buildPracticeView(
         nextSession,
         words,
-        latestAttempt,
+        recentAttempts,
         answeredAt,
         view.optionWords,
       ),
@@ -289,7 +295,7 @@ export function applyOptimisticTypedAnswer(
     nextView: buildPracticeView(
       nextSession,
       words,
-      latestAttempt,
+      recentAttempts,
       answeredAt,
       view.optionWords,
     ),
@@ -311,11 +317,7 @@ export function applyOptimisticGuess(
   return buildPracticeView(
     view.session,
     words,
-    {
-      created_at: guessedAt,
-      question_type: "sat_usage",
-      session_word_id: pendingGuess.sessionWordId,
-    },
+    view.recentAttempts,
     guessedAt,
     view.optionWords,
   );
@@ -338,6 +340,7 @@ export function applyOptimisticForeverReviewAnswer(
 
   const nextSession = incrementQuestionCount(view.session);
   const latestAttempt = getLatestAttempt(question, answeredAt);
+  const recentAttempts = prependRecentAttempt(view.recentAttempts, latestAttempt);
   const isCorrect = selectedVocabWordId === question.targetVocabWordId;
   const shouldAskGuess = isCorrect && question.questionType === "sat_usage";
 
@@ -357,7 +360,7 @@ export function applyOptimisticForeverReviewAnswer(
         view,
         nextSession,
         words,
-        latestAttempt,
+        recentAttempts,
         updateCheckpointAfterAnswer(view, targetWord, "incorrect"),
       ),
     };
@@ -372,6 +375,7 @@ export function applyOptimisticForeverReviewAnswer(
       nextView: {
         ...view,
         checkpoint: updateCheckpointAfterAnswer(view, targetWord, "correct"),
+        recentAttempts,
         session: nextSession,
         words,
       },
@@ -392,7 +396,7 @@ export function applyOptimisticForeverReviewAnswer(
       view,
       nextSession,
       words,
-      latestAttempt,
+      recentAttempts,
       updateCheckpointAfterAnswer(
         view,
         targetWord,
@@ -421,6 +425,7 @@ export function applyOptimisticForeverReviewTypedAnswer(
 
   const nextSession = incrementQuestionCount(view.session);
   const latestAttempt = getLatestAttempt(question, answeredAt);
+  const recentAttempts = prependRecentAttempt(view.recentAttempts, latestAttempt);
   const isCorrect = isTypedAnswerCorrect(
     question,
     targetWord,
@@ -444,7 +449,7 @@ export function applyOptimisticForeverReviewTypedAnswer(
         view,
         nextSession,
         words,
-        latestAttempt,
+        recentAttempts,
         updateCheckpointAfterAnswer(view, targetWord, "incorrect"),
       ),
     };
@@ -459,7 +464,7 @@ export function applyOptimisticForeverReviewTypedAnswer(
       view,
       nextSession,
       words,
-      latestAttempt,
+      recentAttempts,
       updateCheckpointAfterAnswer(
         view,
         targetWord,
@@ -498,11 +503,7 @@ export function applyOptimisticForeverReviewGuess(
     view,
     view.session,
     words,
-    {
-      created_at: guessedAt,
-      question_type: "sat_usage",
-      session_word_id: pendingGuess.sessionWordId,
-    },
+    view.recentAttempts,
     updateCheckpointAfterGuess(
       view,
       targetWord,
@@ -530,17 +531,24 @@ function getLatestAttempt(
   };
 }
 
+function prependRecentAttempt(
+  recentAttempts: LatestAttempt[],
+  latestAttempt: LatestAttempt,
+) {
+  return [latestAttempt, ...recentAttempts].slice(0, RECENT_WORD_COOLDOWN_COUNT);
+}
+
 function buildForeverReviewView(
   view: ForeverReviewView,
   session: StudySession,
   words: SessionWordWithWord[],
-  latestAttempt: LatestAttempt,
+  recentAttempts: LatestAttempt[],
   checkpoint: ForeverReviewView["checkpoint"],
 ): ForeverReviewView {
   const question = buildNextForeverReviewQuestion(
     session,
     words,
-    latestAttempt,
+    recentAttempts,
     view.optionWords,
   );
 
@@ -553,6 +561,7 @@ function buildForeverReviewView(
     checkpoint,
     question,
     readyCount: getReadyCount(words),
+    recentAttempts,
     session,
     totalWords: words.length,
     words,
@@ -562,7 +571,7 @@ function buildForeverReviewView(
 function buildPracticeView(
   session: StudySession,
   words: SessionWordWithWord[],
-  latestAttempt: LatestAttempt,
+  recentAttempts: LatestAttempt[],
   completedAt: string,
   optionWords: QuestionView["optionWords"],
 ): SessionView {
@@ -583,7 +592,7 @@ function buildPracticeView(
     };
   }
 
-  const question = buildNextQuestion(session, words, latestAttempt, optionWords);
+  const question = buildNextQuestion(session, words, recentAttempts, optionWords);
 
   if (!question) {
     const completedSession = completeSession(session, "mastered", completedAt);
@@ -601,6 +610,7 @@ function buildPracticeView(
     optionWords,
     question,
     readyCount: getReadyCount(words),
+    recentAttempts,
     session,
     totalWords: words.length,
     words,

@@ -8,8 +8,17 @@ import {
   type TypedAnswerGrade,
   type VocabWord,
 } from "@/lib/study/types";
+import { RECENT_WORD_COOLDOWN_COUNT } from "@/lib/study/config";
 import { getExampleSentences } from "@/lib/study/example-sentences";
 import random from "random";
+
+type RecentAttemptsInput = LatestAttempt | LatestAttempt[] | null;
+
+type QuestionCombination = {
+  word: SessionWordWithWord;
+  questionType: QuestionType;
+  score: number;
+};
 
 const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
   definition_recall: "Definition recall",
@@ -91,17 +100,63 @@ export function isRecallReady(word: SessionWordWithWord) {
 export function buildNextQuestion(
   session: StudySession,
   words: SessionWordWithWord[],
-  latestAttempt: LatestAttempt | null,
+  recentAttempts: RecentAttemptsInput,
   optionWords: VocabWord[] = words.map((word) => word.vocab_word),
 ): StudyQuestion | null {
-  const candidates = words.filter((word) => word.status !== "recall_ready");
+  return buildNextScheduledQuestion({
+    getQuestionType: getNextUnsatisfiedQuestionType,
+    getWordPriority,
+    isEligible: (word) => word.status !== "recall_ready",
+    optionWords,
+    recentAttempts,
+    session,
+    words,
+  });
+}
 
-  if (candidates.length === 0) {
-    return null;
-  }
+export function buildNextForeverReviewQuestion(
+  session: StudySession,
+  words: SessionWordWithWord[],
+  recentAttempts: RecentAttemptsInput,
+  optionWords: VocabWord[] = words.map((word) => word.vocab_word),
+): StudyQuestion | null {
+  return buildNextScheduledQuestion({
+    getQuestionType: (word) =>
+      getNextUnsatisfiedQuestionType(word) ??
+      getReviewQuestionType(session, word),
+    getWordPriority: getForeverReviewWordPriority,
+    isEligible: () => true,
+    optionWords,
+    recentAttempts,
+    session,
+    words,
+  });
+}
 
-  const combinations = candidates.flatMap((word) => {
-    const questionType = getNextUnsatisfiedQuestionType(word);
+function buildNextScheduledQuestion({
+  getQuestionType,
+  getWordPriority,
+  isEligible,
+  optionWords,
+  recentAttempts,
+  session,
+  words,
+}: {
+  getQuestionType: (word: SessionWordWithWord) => QuestionType | undefined;
+  getWordPriority: (word: SessionWordWithWord) => number;
+  isEligible: (word: SessionWordWithWord) => boolean;
+  optionWords: VocabWord[];
+  recentAttempts: RecentAttemptsInput;
+  session: StudySession;
+  words: SessionWordWithWord[];
+}) {
+  const attempts = getRecentAttempts(recentAttempts);
+  const combinations = words.flatMap((word) => {
+    if (!isEligible(word)) {
+      return [];
+    }
+
+    const questionType = getQuestionType(word);
 
     return questionType
       ? [
@@ -115,88 +170,15 @@ export function buildNextQuestion(
   });
 
   const rankedCombinations = combinations.sort((first, second) => {
-    const firstBlocked = isSpacingBlocked(first.word, latestAttempt);
-    const secondBlocked = isSpacingBlocked(second.word, latestAttempt);
+    const firstCoolingDown = isCoolingDown(first.word, attempts);
+    const secondCoolingDown = isCoolingDown(second.word, attempts);
 
-    if (firstBlocked !== secondBlocked) {
-      return firstBlocked ? 1 : -1;
+    if (firstCoolingDown !== secondCoolingDown) {
+      return firstCoolingDown ? 1 : -1;
     }
 
-    const firstRepeatPenalty = getRepeatPenalty(first, latestAttempt);
-    const secondRepeatPenalty = getRepeatPenalty(second, latestAttempt);
-    const firstScore = first.score - firstRepeatPenalty;
-    const secondScore = second.score - secondRepeatPenalty;
-
-    if (firstScore !== secondScore) {
-      return secondScore - firstScore;
-    }
-
-    if (first.word.last_attempted_at !== second.word.last_attempted_at) {
-      if (!first.word.last_attempted_at) {
-        return -1;
-      }
-
-      if (!second.word.last_attempted_at) {
-        return 1;
-      }
-
-      return first.word.last_attempted_at.localeCompare(
-        second.word.last_attempted_at,
-      );
-    }
-
-    return first.word.position - second.word.position;
-  });
-
-  const selected = rankedCombinations[0];
-
-  if (!selected) {
-    return null;
-  }
-
-  return createQuestion(
-    selected.word,
-    selected.questionType,
-    words,
-    optionWords,
-    getQuestionSeed(session, selected.word, selected.questionType),
-  );
-}
-
-export function buildNextForeverReviewQuestion(
-  session: StudySession,
-  words: SessionWordWithWord[],
-  latestAttempt: LatestAttempt | null,
-  optionWords: VocabWord[] = words.map((word) => word.vocab_word),
-): StudyQuestion | null {
-  if (words.length === 0) {
-    return null;
-  }
-
-  const combinations = words.map((word) => {
-    const questionType =
-      getNextUnsatisfiedQuestionType(word) ??
-      getReviewQuestionType(session, word);
-
-    return {
-      word,
-      questionType,
-      score: getForeverReviewWordPriority(word) + getStagePriority(questionType),
-    };
-  });
-
-  const rankedCombinations = combinations.sort((first, second) => {
-    const firstBlocked = isSpacingBlocked(first.word, latestAttempt);
-    const secondBlocked = isSpacingBlocked(second.word, latestAttempt);
-
-    if (firstBlocked !== secondBlocked) {
-      return firstBlocked ? 1 : -1;
-    }
-
-    const firstRepeatPenalty = getRepeatPenalty(first, latestAttempt);
-    const secondRepeatPenalty = getRepeatPenalty(second, latestAttempt);
-    const firstScore = first.score - firstRepeatPenalty;
-    const secondScore = second.score - secondRepeatPenalty;
+    const firstScore = getAdjustedScore(first, attempts);
+    const secondScore = getAdjustedScore(second, attempts);
 
     if (firstScore !== secondScore) {
       return secondScore - firstScore;
@@ -283,33 +265,44 @@ function getStagePriority(questionType: QuestionType) {
   return (QUESTION_TYPES.length - stageIndex) * 3;
 }
 
-function isSpacingBlocked(
-  word: SessionWordWithWord,
-  latestAttempt: LatestAttempt | null,
-) {
-  return latestAttempt?.session_word_id === word.id;
+function getRecentAttempts(recentAttempts: RecentAttemptsInput) {
+  if (!recentAttempts) {
+    return [];
+  }
+
+  return (Array.isArray(recentAttempts) ? recentAttempts : [recentAttempts])
+    .filter(Boolean)
+    .slice(0, RECENT_WORD_COOLDOWN_COUNT);
 }
 
-function getRepeatPenalty(
-  combination: { word: SessionWordWithWord; questionType: QuestionType },
-  latestAttempt: LatestAttempt | null,
+function isCoolingDown(
+  word: SessionWordWithWord,
+  recentAttempts: LatestAttempt[],
 ) {
-  if (!latestAttempt) {
-    return 0;
+  return recentAttempts.some((attempt) => attempt.session_word_id === word.id);
+}
+
+function getAdjustedScore(
+  combination: QuestionCombination,
+  recentAttempts: LatestAttempt[],
+) {
+  const recentAttemptIndex = recentAttempts.findIndex(
+    (attempt) => attempt.session_word_id === combination.word.id,
+  );
+
+  if (recentAttemptIndex === -1) {
+    return combination.score;
   }
 
-  if (
-    latestAttempt.session_word_id === combination.word.id &&
-    latestAttempt.question_type === combination.questionType
-  ) {
-    return 140;
-  }
+  const cooldownPenalty =
+    (RECENT_WORD_COOLDOWN_COUNT - recentAttemptIndex) * 220;
+  const repeatedQuestionPenalty =
+    recentAttempts[recentAttemptIndex]?.question_type ===
+    combination.questionType
+      ? 60
+      : 0;
 
-  if (latestAttempt.session_word_id === combination.word.id) {
-    return 100;
-  }
-
-  return 0;
+  return combination.score - cooldownPenalty - repeatedQuestionPenalty;
 }
 
 function createQuestion(

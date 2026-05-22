@@ -184,6 +184,7 @@ export type SessionView =
       optionWords: VocabWord[];
       question: StudyQuestion;
       readyCount: number;
+      recentAttempts: LatestAttempt[];
       totalWords: number;
     }
   | {
@@ -206,6 +207,7 @@ export type ForeverReviewView = {
   optionWords: VocabWord[];
   question: StudyQuestion;
   readyCount: number;
+  recentAttempts: LatestAttempt[];
   screen: "question";
   session: StudySession;
   totalWords: number;
