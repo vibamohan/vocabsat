@@ -8,7 +8,6 @@ import { StudyAppShell } from "@/components/study/app-shell";
 import {
   AnswerReviewScreen,
   QuestionScreen,
-  ReviewCheckpointScreen,
   ReviewStartScreen,
 } from "@/components/study/session-screens";
 import { Button } from "@/components/ui/button";
@@ -19,7 +18,6 @@ import {
   getForeverReviewView,
   submitForeverReviewAnswer,
 } from "@/lib/study/client-session";
-import { FOREVER_REVIEW_CHECKPOINT_INTERVAL } from "@/lib/study/config";
 import {
   applyOptimisticForeverReviewAnswerReview,
   buildMultipleChoiceAnswerReview,
@@ -41,8 +39,7 @@ type ReviewMode =
       type: "answer_review";
       review: PendingAnswerReview;
       sourceView: ForeverReviewView;
-    }
-  | { type: "checkpoint" };
+    };
 
 export function ReviewClient() {
   const router = useRouter();
@@ -56,21 +53,10 @@ export function ReviewClient() {
     null,
   );
   const [view, setView] = useState<ForeverReviewView | null>(null);
-  const dismissedCheckpointRef = useRef<number | null>(null);
   const handledQuestionKeyRef = useRef<string | null>(null);
   const handledReviewAttemptIdsRef = useRef<Set<string>>(new Set());
   const persistenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const persistenceVersionRef = useRef(0);
-
-  const shouldShowCheckpoint = useCallback((nextView: ForeverReviewView) => {
-    const answered = nextView.session.total_questions_answered;
-
-    return (
-      answered > 0 &&
-      answered % FOREVER_REVIEW_CHECKPOINT_INTERVAL === 0 &&
-      dismissedCheckpointRef.current !== answered
-    );
-  }, []);
 
   const refreshView = useCallback(async () => {
     if (!user) {
@@ -80,8 +66,8 @@ export function ReviewClient() {
     const nextView = await getForeverReviewView(supabase, user.id);
 
     setView(nextView);
-    setMode(shouldShowCheckpoint(nextView) ? { type: "checkpoint" } : { type: "normal" });
-  }, [shouldShowCheckpoint, supabase, user]);
+    setMode({ type: "normal" });
+  }, [supabase, user]);
 
   const enqueuePersistence = useCallback(
     (operation: () => Promise<void>, fallbackMessage: string) => {
@@ -152,13 +138,12 @@ export function ReviewClient() {
 
     setError(null);
     setIsPending(true);
-    dismissedCheckpointRef.current = null;
 
     try {
       const nextView = await getForeverReviewView(supabase, user.id);
 
       setView(nextView);
-      setMode(shouldShowCheckpoint(nextView) ? { type: "checkpoint" } : { type: "normal" });
+      setMode({ type: "normal" });
     } catch (caughtError) {
       setError(getErrorMessage(caughtError, "Unable to start review."));
     } finally {
@@ -269,11 +254,7 @@ export function ReviewClient() {
       );
 
       setView(result.nextView);
-      setMode(
-        shouldShowCheckpoint(result.nextView)
-          ? { type: "checkpoint" }
-          : { type: "normal" },
-      );
+      setMode({ type: "normal" });
     } catch (caughtError) {
       setError(getErrorMessage(caughtError, "Unable to check the answer."));
       handledQuestionKeyRef.current = null;
@@ -310,14 +291,6 @@ export function ReviewClient() {
       },
       "Unable to save the review answer.",
     );
-  };
-
-  const handleCheckpointContinue = () => {
-    if (view) {
-      dismissedCheckpointRef.current = view.session.total_questions_answered;
-    }
-
-    setMode({ type: "normal" });
   };
 
   return (
@@ -365,27 +338,12 @@ export function ReviewClient() {
         <AnswerReviewScreen
           isPending={isPending}
           onGrade={handleReviewGrade}
-          progressContext={
-            mode.sourceView
-              ? {
-                  readyCount: mode.sourceView.readyCount,
-                  strengthenedCount:
-                    mode.sourceView.checkpoint.strengthenedCount,
-                  variant: "review",
-                  words: mode.sourceView.words,
-                }
-              : undefined
-          }
+          progressContext={{
+            reviewedCount: mode.sourceView.session.total_questions_answered,
+            unfamiliarCount: mode.sourceView.checkpoint.weakWordsFound,
+            variant: "review",
+          }}
           review={mode.review}
-        />
-      ) : null}
-
-      {!isLoading && view && mode.type === "checkpoint" ? (
-        <ReviewCheckpointScreen
-          checkpoint={view.checkpoint}
-          isPending={isPending}
-          onContinue={handleCheckpointContinue}
-          onStop={() => router.push("/dashboard")}
         />
       ) : null}
     </StudyAppShell>

@@ -10,12 +10,12 @@ import {
   GuessCheckScreen,
   LearnScreen,
   QuestionScreen,
-  ReviewCheckpointScreen,
   ReviewStartScreen,
 } from "@/components/study/session-screens";
 import type {
-  PendingAnswerReview,
+  ForeverReviewView,
   ForeverReviewSummary,
+  PendingAnswerReview,
   PendingGuess,
   SessionView,
   StudyQuestion,
@@ -92,6 +92,31 @@ function questionView(): Extract<SessionView, { screen: "question" }> {
   };
 }
 
+function reviewQuestionView(): ForeverReviewView {
+  const view = questionView();
+
+  return {
+    checkpoint: {
+      correctCount: 5,
+      questionsAnswered: 7,
+      strengthenedCount: 1,
+      weakWordsFound: 2,
+    },
+    mode: "forever_review",
+    optionWords: view.optionWords,
+    question: view.question,
+    readyCount: view.readyCount,
+    recentAttempts: view.recentAttempts,
+    screen: "question",
+    session: studySession({
+      session_type: "forever_review",
+      total_questions_answered: 7,
+    }),
+    totalWords: view.totalWords,
+    words: view.words,
+  };
+}
+
 function reviewSummary(
   overrides: Partial<ForeverReviewSummary> = {},
 ): ForeverReviewSummary {
@@ -153,6 +178,24 @@ describe("study session screens", () => {
     render(<QuestionScreen isPending onAnswer={vi.fn()} view={questionView()} />);
 
     expect(screen.getByRole("button", { name: /brief/i })).toBeDisabled();
+  });
+
+  test("shows simple counters for forever review progress", () => {
+    render(
+      <QuestionScreen
+        onAnswer={vi.fn()}
+        variant="review"
+        view={reviewQuestionView()}
+      />,
+    );
+
+    expect(screen.getByText("Forever Review")).toBeInTheDocument();
+    expect(screen.getByText("7 reviewed today")).toBeInTheDocument();
+    expect(screen.getByText("2 unfamiliar")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("progressbar", { name: "Review strength" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Review strength")).not.toBeInTheDocument();
   });
 
   test("submits a typed question answer", async () => {
@@ -410,47 +453,5 @@ describe("study session screens", () => {
     expect(
       screen.getByText("1 weak word will lead your next review."),
     ).toBeInTheDocument();
-  });
-
-  test("continues from a review checkpoint", async () => {
-    const user = userEvent.setup();
-    const onContinue = vi.fn();
-
-    render(
-      <ReviewCheckpointScreen
-        checkpoint={{
-          correctCount: 8,
-          questionsAnswered: 10,
-          strengthenedCount: 2,
-          weakWordsFound: 1,
-        }}
-        onContinue={onContinue}
-        onStop={vi.fn()}
-      />,
-    );
-    await user.click(screen.getByRole("button", { name: "Keep Reviewing" }));
-
-    expect(onContinue).toHaveBeenCalledTimes(1);
-  });
-
-  test("stops from a review checkpoint", async () => {
-    const user = userEvent.setup();
-    const onStop = vi.fn();
-
-    render(
-      <ReviewCheckpointScreen
-        checkpoint={{
-          correctCount: 8,
-          questionsAnswered: 10,
-          strengthenedCount: 2,
-          weakWordsFound: 1,
-        }}
-        onContinue={vi.fn()}
-        onStop={onStop}
-      />,
-    );
-    await user.click(screen.getByRole("button", { name: "Stop" }));
-
-    expect(onStop).toHaveBeenCalledTimes(1);
   });
 });

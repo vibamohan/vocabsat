@@ -23,7 +23,6 @@ import type {
   AnswerReviewGrade,
   CorrectionFeedback,
   DefinitionSelfGrade,
-  ForeverReviewCheckpoint,
   ForeverReviewSummary,
   ForeverReviewView,
   PendingAnswerReview,
@@ -37,12 +36,17 @@ type LearnView = Extract<SessionView, { screen: "learn" }>;
 type QuestionView = Extract<SessionView, { screen: "question" }>;
 type CompleteView = Extract<SessionView, { screen: "complete" }>;
 type QuestionScreenView = QuestionView | ForeverReviewView;
-type StudyProgressContext = {
-  readyCount: number;
-  strengthenedCount?: number;
-  variant: "daily" | "review";
-  words: SessionWordWithWord[];
-};
+type StudyProgressContext =
+  | {
+      readyCount: number;
+      variant: "daily";
+      words: SessionWordWithWord[];
+    }
+  | {
+      reviewedCount: number;
+      unfamiliarCount: number;
+      variant: "review";
+    };
 
 const ANSWER_LETTERS = ["A", "B", "C", "D", "E", "F", "G"];
 
@@ -124,17 +128,21 @@ export function QuestionScreen({
   variant?: "daily" | "review";
   view: QuestionScreenView;
 }) {
-  const strengthenedCount =
-    "checkpoint" in view ? view.checkpoint.strengthenedCount : 0;
-
   return (
     <StudyStage
-      progressContext={{
-        readyCount: view.readyCount,
-        strengthenedCount,
-        variant,
-        words: view.words,
-      }}
+      progressContext={
+        variant === "review" && "checkpoint" in view
+          ? {
+              reviewedCount: view.session.total_questions_answered,
+              unfamiliarCount: view.checkpoint.weakWordsFound,
+              variant: "review",
+            }
+          : {
+              readyCount: view.readyCount,
+              variant: "daily",
+              words: view.words,
+            }
+      }
     >
       <Card className="w-full">
         <CardHeader className="gap-3 p-5 sm:p-7">
@@ -701,53 +709,6 @@ export function CompletionScreen({
   );
 }
 
-export function ReviewCheckpointScreen({
-  checkpoint,
-  isPending,
-  onContinue,
-  onStop,
-}: {
-  checkpoint: ForeverReviewCheckpoint;
-  isPending?: boolean;
-  onContinue: () => void;
-  onStop: () => void;
-}) {
-  return (
-    <Card className="w-full max-w-2xl">
-      <CardHeader>
-        <Badge variant="secondary" className="w-fit">
-          Checkpoint
-        </Badge>
-        <CardTitle>Review checkpoint</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Stat label="correct" value={checkpoint.correctCount} />
-          <Stat label="weak words found" value={checkpoint.weakWordsFound} />
-          <Stat label="word strengthened" value={checkpoint.strengthenedCount} />
-        </div>
-      </CardContent>
-      <CardFooter>
-        <div className="flex flex-wrap gap-3">
-          <Button disabled={isPending} onClick={onContinue} type="button">
-            <ArrowRight data-icon="inline-start" />
-            Keep Reviewing
-          </Button>
-          <Button
-            disabled={isPending}
-            onClick={onStop}
-            type="button"
-            variant="outline"
-          >
-            <X data-icon="inline-start" />
-            Stop
-          </Button>
-        </div>
-      </CardFooter>
-    </Card>
-  );
-}
-
 function Stat({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="border-l pl-4">
@@ -779,36 +740,35 @@ function StudyProgressHeader({
 }: {
   progressContext: StudyProgressContext;
 }) {
+  if (progressContext.variant === "review") {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1">
+        <Badge variant="secondary">Forever Review</Badge>
+        <div className="flex flex-wrap gap-2">
+          <Badge variant="outline">
+            {progressContext.reviewedCount} reviewed today
+          </Badge>
+          <Badge variant="outline">
+            {progressContext.unfamiliarCount} unfamiliar
+          </Badge>
+        </div>
+      </div>
+    );
+  }
+
   const progress = getStudyProgress(progressContext.words);
 
   return (
     <div className="flex flex-col gap-3 px-1">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <Badge variant="secondary">
-          {progressContext.variant === "review"
-            ? "Forever Review"
-            : "Recall practice"}
-        </Badge>
+        <Badge variant="secondary">Recall practice</Badge>
         <div className="flex flex-wrap gap-2">
-          {progressContext.variant === "review" ? (
-            <Badge variant="outline">
-              {progressContext.strengthenedCount ?? 0} strengthened
-            </Badge>
-          ) : (
-            <Badge variant="outline">
-              {progressContext.readyCount} recall-ready
-            </Badge>
-          )}
+          <Badge variant="outline">
+            {progressContext.readyCount} recall-ready
+          </Badge>
         </div>
       </div>
-      <StudyProgressMeter
-        label={
-          progressContext.variant === "review"
-            ? "Review strength"
-            : "Daily mastery"
-        }
-        progress={progress}
-      />
+      <StudyProgressMeter label="Daily mastery" progress={progress} />
     </div>
   );
 }
