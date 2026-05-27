@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ForeverReviewCard } from "@/components/study/forever-review-card";
@@ -18,6 +18,7 @@ import type { ForeverReviewSummary, TodaySessionSummary } from "@/lib/study/type
 import { createClient } from "@/lib/supabase/client";
 
 export function DashboardClient() {
+  const pathname = usePathname();
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
   const [error, setError] = useState<string | null>(null);
@@ -65,8 +66,14 @@ export function DashboardClient() {
   }, [router, supabase]);
 
   useEffect(() => {
+    if (pathname !== "/dashboard") {
+      return;
+    }
+
+    setIsBusy(false);
+    setIsReviewBusy(false);
     void loadDashboard();
-  }, [loadDashboard]);
+  }, [loadDashboard, pathname]);
 
   const handleStart = async () => {
     if (!user) {
@@ -78,6 +85,7 @@ export function DashboardClient() {
 
     try {
       await startOrContinueTodaySession(supabase, user.id);
+      setIsBusy(false);
       router.push("/session");
     } catch (caughtError) {
       setError(
