@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowRight, BookOpenCheck, Check, RotateCcw, X } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -47,8 +47,6 @@ type StudyProgressContext =
       unfamiliarCount: number;
       variant: "review";
     };
-
-const ANSWER_LETTERS = ["A", "B", "C", "D", "E", "F", "G"];
 
 export function LearnScreen({
   isPending,
@@ -128,6 +126,36 @@ export function QuestionScreen({
   variant?: "daily" | "review";
   view: QuestionScreenView;
 }) {
+  const handleNumberAnswer = useCallback(
+    (event: KeyboardEvent) => {
+      if (
+        isPending ||
+        view.question.answerMode === "typed" ||
+        shouldIgnoreStudyShortcut(event)
+      ) {
+        return;
+      }
+
+      const optionIndex = getNumberShortcutIndex(event);
+
+      if (optionIndex === null) {
+        return;
+      }
+
+      const option = view.question.options[optionIndex];
+
+      if (!option) {
+        return;
+      }
+
+      event.preventDefault();
+      onAnswer(view.question, option.vocabWordId);
+    },
+    [isPending, onAnswer, view.question],
+  );
+
+  useStudyKeydown(handleNumberAnswer);
+
   return (
     <StudyStage
       progressContext={
@@ -173,7 +201,7 @@ export function QuestionScreen({
                   variant="outline"
                 >
                   <span className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-muted text-xs font-semibold">
-                    {ANSWER_LETTERS[index]}
+                    {index + 1}
                   </span>
                   <span className="leading-relaxed">{option.label}</span>
                 </Button>
@@ -286,6 +314,19 @@ export function CorrectionScreen({
   progressContext?: StudyProgressContext;
 }) {
   const word = correction.targetWord;
+  const handleContinueShortcut = useCallback(
+    (event: KeyboardEvent) => {
+      if (isPending || event.code !== "Space" || shouldIgnoreStudyShortcut(event)) {
+        return;
+      }
+
+      event.preventDefault();
+      onContinue();
+    },
+    [isPending, onContinue],
+  );
+
+  useStudyKeydown(handleContinueShortcut);
 
   return (
     <StudyStage progressContext={progressContext}>
@@ -366,6 +407,19 @@ export function AnswerReviewScreen({
   const canMarkRight = review.systemGrade !== "correct";
   const canMarkWrong = review.systemGrade !== "incorrect";
   const canMarkUnsure = review.systemGrade !== "incorrect";
+  const handleContinueShortcut = useCallback(
+    (event: KeyboardEvent) => {
+      if (isPending || event.code !== "Space" || shouldIgnoreStudyShortcut(event)) {
+        return;
+      }
+
+      event.preventDefault();
+      onGrade(acceptedGrade);
+    },
+    [acceptedGrade, isPending, onGrade],
+  );
+
+  useStudyKeydown(handleContinueShortcut);
 
   return (
     <StudyStage progressContext={progressContext}>
@@ -561,6 +615,89 @@ function getReviewBadgeClassName(grade: AnswerReviewGrade) {
 
 function normalizeAnswerText(value?: string) {
   return value?.trim().toLowerCase() ?? "";
+}
+
+function useStudyKeydown(onKeyDown: (event: KeyboardEvent) => void) {
+  useEffect(() => {
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onKeyDown]);
+}
+
+function shouldIgnoreStudyShortcut(event: KeyboardEvent) {
+  return (
+    event.defaultPrevented ||
+    event.repeat ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.shiftKey ||
+    isInteractiveShortcutTarget(event.target)
+  );
+}
+
+function isInteractiveShortcutTarget(target: EventTarget | null) {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+
+  if (target instanceof HTMLElement && target.isContentEditable) {
+    return true;
+  }
+
+  return Boolean(
+    target.closest(
+      [
+        "a[href]",
+        "button",
+        "input",
+        "select",
+        "textarea",
+        "[contenteditable]",
+        "[role='button']",
+        "[role='checkbox']",
+        "[role='combobox']",
+        "[role='link']",
+        "[role='listbox']",
+        "[role='menuitem']",
+        "[role='option']",
+        "[role='radio']",
+        "[role='searchbox']",
+        "[role='slider']",
+        "[role='spinbutton']",
+        "[role='switch']",
+        "[role='tab']",
+        "[role='textbox']",
+      ].join(","),
+    ),
+  );
+}
+
+function getNumberShortcutIndex(event: KeyboardEvent) {
+  const digit = getShortcutDigit(event);
+
+  if (digit === null || digit < 1) {
+    return null;
+  }
+
+  return digit - 1;
+}
+
+function getShortcutDigit(event: KeyboardEvent) {
+  if (/^[0-9]$/.test(event.key)) {
+    return Number(event.key);
+  }
+
+  if (/^Digit[0-9]$/.test(event.code)) {
+    return Number(event.code.slice(5));
+  }
+
+  if (/^Numpad[0-9]$/.test(event.code)) {
+    return Number(event.code.slice(6));
+  }
+
+  return null;
 }
 
 export function DefinitionSelfCheckScreen({
