@@ -180,6 +180,37 @@ describe("study session screens", () => {
     expect(screen.getByRole("button", { name: /brief/i })).toBeDisabled();
   });
 
+  test("shows one aggregate daily mastery progress bar", () => {
+    const view = questionView();
+    const readyWord = satisfiedWord({
+      id: "ready-word",
+      vocab_word_id: 2,
+      word: { id: 2, word: "candid" },
+    });
+
+    render(
+      <QuestionScreen
+        onAnswer={vi.fn()}
+        view={{
+          ...view,
+          readyCount: 1,
+          totalWords: 2,
+          words: [readyWord, view.words[0]],
+        }}
+      />,
+    );
+
+    const progressBars = screen.getAllByRole("progressbar", {
+      name: "Daily mastery",
+    });
+    const fill = progressBars[0].firstElementChild as HTMLElement;
+
+    expect(progressBars).toHaveLength(1);
+    expect(progressBars[0]).toHaveAttribute("aria-valuenow", "50");
+    expect(progressBars[0]).toHaveClass("h-2.5");
+    expect(fill.style.width).toBe("50%");
+  });
+
   test("shows simple counters for forever review progress", () => {
     render(
       <QuestionScreen

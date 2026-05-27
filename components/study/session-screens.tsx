@@ -780,54 +780,25 @@ function StudyProgressMeter({
   label: string;
   progress: StudyProgress;
 }) {
-  const showSegments =
-    progress.wordProgress.length > 0 && progress.wordProgress.length <= 12;
-
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between gap-3 text-xs font-medium text-muted-foreground">
         <span>{label}</span>
         <span>{progress.percent}%</span>
       </div>
-      {showSegments ? (
+      <div
+        aria-label={label}
+        aria-valuemax={100}
+        aria-valuemin={0}
+        aria-valuenow={progress.percent}
+        className="h-2.5 overflow-hidden rounded-full bg-muted"
+        role="progressbar"
+      >
         <div
-          aria-label={label}
-          aria-valuemax={100}
-          aria-valuemin={0}
-          aria-valuenow={progress.percent}
-          className="grid gap-1"
-          role="progressbar"
-          style={{
-            gridTemplateColumns: `repeat(${progress.wordProgress.length}, minmax(0, 1fr))`,
-          }}
-        >
-          {progress.wordProgress.map((word) => (
-            <div
-              className="h-2.5 overflow-hidden rounded-full bg-muted"
-              key={word.id}
-            >
-              <div
-                className="h-full rounded-full bg-primary shadow-sm transition-[width] duration-500 ease-out"
-                style={{ width: `${word.percent}%` }}
-              />
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div
-          aria-label={label}
-          aria-valuemax={100}
-          aria-valuemin={0}
-          aria-valuenow={progress.percent}
-          className="h-2.5 overflow-hidden rounded-full bg-muted"
-          role="progressbar"
-        >
-          <div
-            className="h-full rounded-full bg-primary shadow-sm transition-[width] duration-500 ease-out"
-            style={{ width: `${progress.percent}%` }}
-          />
-        </div>
-      )}
+          className="h-full rounded-full bg-primary shadow-sm transition-[width] duration-500 ease-out"
+          style={{ width: `${progress.percent}%` }}
+        />
+      </div>
     </div>
   );
 }
