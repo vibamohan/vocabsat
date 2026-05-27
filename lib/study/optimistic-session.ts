@@ -912,6 +912,10 @@ function getSatisfiedUpdate(questionType: QuestionType) {
     return { satisfied_word_recall: true };
   }
 
+  if (questionType === "typed_reverse_recall") {
+    return { satisfied_typed_reverse_recall: true };
+  }
+
   return { satisfied_definition_recall: true };
 }
 

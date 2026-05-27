@@ -1,10 +1,13 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  buildForeverReviewWordSelection,
   buildDailyWordSelection,
+  excludeKnownVocabWords,
   getSeenVocabWordIds,
   getMissingForeverReviewSelections,
   getUnseenWordsByUserOrder,
+  isReviewableMasteryRow,
   type DailySelectionMasteryRow,
   type SelectedSessionWord,
 } from "@/lib/study/client-session";
@@ -65,6 +68,16 @@ describe("daily word selection helpers", () => {
     );
 
     expect(unseenWords.map((word) => word.id)).toEqual([4]);
+  });
+
+  test("excludes known words from question option pools", () => {
+    const words = [1, 2, 3].map((id) => vocabWord({ id }));
+    const optionWords = excludeKnownVocabWords(words, [
+      masteryRow({ status: "known", vocab_word_id: 1 }),
+      masteryRow({ status: "weak", vocab_word_id: 2 }),
+    ]);
+
+    expect(optionWords.map((word) => word.id)).toEqual([2, 3]);
   });
 
   test("supports review selections as exclusions before filling new words", () => {
@@ -159,5 +172,57 @@ describe("daily word selection helpers", () => {
     expect(
       selectedWords.filter((entry) => entry.source === "review"),
     ).toHaveLength(1);
+  });
+
+  test("excludes known rows from daily review while keeping them seen", () => {
+    const words = Array.from({ length: 12 }, (_, index) =>
+      vocabWord({ id: index + 1 }),
+    );
+    const selectedWords = buildDailyWordSelection({
+      masteryRows: [
+        masteryRow({ status: "known", vocab_word_id: 1 }),
+        masteryRow({ status: "recall_ready", vocab_word_id: 2 }),
+      ],
+      seenSessionWordRows: [],
+      studyDate: "2026-05-20",
+      userId: "user-1",
+      words,
+    });
+
+    expect(selectedWords.map((entry) => entry.word.id)).not.toContain(1);
+    expect(
+      selectedWords.filter((entry) => entry.source === "review").map(
+        (entry) => entry.word.id,
+      ),
+    ).toEqual([2]);
+  });
+
+  test("identifies known mastery rows as not reviewable", () => {
+    expect(isReviewableMasteryRow(masteryRow({ vocab_word_id: 1 }))).toBe(true);
+    expect(
+      isReviewableMasteryRow(
+        masteryRow({ status: "known", vocab_word_id: 1 }),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("forever review word selection helpers", () => {
+  test("excludes known rows from forever review selections", () => {
+    const words = [1, 2, 3].map((id) => vocabWord({ id }));
+    const selectedWords = buildForeverReviewWordSelection({
+      masteryRows: [
+        masteryRow({ status: "known", vocab_word_id: 1 }),
+        masteryRow({ status: "weak", vocab_word_id: 2 }),
+        masteryRow({ status: "recall_ready", vocab_word_id: 3 }),
+      ],
+      studyDate: "2026-05-20",
+      userId: "user-1",
+      words,
+    });
+
+    expect(selectedWords.map((entry) => entry.word.id)).not.toContain(1);
+    expect(selectedWords).toHaveLength(2);
+    expect(selectedWords.every((entry) => entry.source === "review")).toBe(true);
   });
 });

@@ -4,6 +4,7 @@ export const QUESTION_TYPES = [
   "sat_usage",
   "word_recall",
   "definition_recall",
+  "typed_reverse_recall",
 ] as const;
 
 export type QuestionType = (typeof QUESTION_TYPES)[number];
@@ -24,7 +25,7 @@ export type DefinitionSelfGrade = "correct" | "incorrect" | "unsure";
 
 export type TypedAnswerGrade = "correct" | "incorrect" | "unsure";
 
-export type UserWordStatus = "learning" | "weak" | "recall_ready";
+export type UserWordStatus = "learning" | "weak" | "recall_ready" | "known";
 
 export type SessionWordSource = "new" | "review";
 
@@ -67,6 +68,7 @@ export type SessionWord = {
   satisfied_sat_usage: boolean;
   satisfied_word_recall: boolean;
   satisfied_definition_recall: boolean;
+  satisfied_typed_reverse_recall: boolean;
   correct_count: number;
   miss_count: number;
   guessed_count: number;

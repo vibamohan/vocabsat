@@ -36,8 +36,11 @@ const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
   meaning_recognition: "Meaning recognition",
   reverse_recall: "Reverse recall",
   sat_usage: "SAT-style usage",
+  typed_reverse_recall: "Typed reverse recall",
   word_recall: "Word recall",
 };
+
+const MASTERY_STEP_COUNT = 5;
 
 export function getQuestionTypeLabel(questionType: QuestionType) {
   return QUESTION_TYPE_LABELS[questionType];
@@ -56,7 +59,10 @@ export function gradeTypedAnswer(
   word: VocabWord,
   typedAnswer: string,
 ): TypedAnswerGrade {
-  if (questionType === "word_recall") {
+  if (
+    questionType === "word_recall" ||
+    questionType === "typed_reverse_recall"
+  ) {
     return normalizeWordAnswer(typedAnswer) === normalizeWordAnswer(word.word)
       ? "correct"
       : "incorrect";
@@ -99,13 +105,33 @@ export function isQuestionTypeSatisfied(
     return word.satisfied_word_recall;
   }
 
+  if (questionType === "typed_reverse_recall") {
+    return word.satisfied_typed_reverse_recall;
+  }
+
   return word.satisfied_definition_recall;
 }
 
 export function isRecallReady(word: SessionWordWithWord) {
-  return QUESTION_TYPES.every((questionType) =>
-    isQuestionTypeSatisfied(word, questionType),
-  );
+  return getCompletedMasteryStepCount(word) === MASTERY_STEP_COUNT;
+}
+
+export function getMasteryStepCount() {
+  return MASTERY_STEP_COUNT;
+}
+
+export function getCompletedMasteryStepCount(word: SessionWordWithWord) {
+  if (word.status === "recall_ready") {
+    return MASTERY_STEP_COUNT;
+  }
+
+  return [
+    hasRecognitionMastery(word),
+    word.satisfied_sat_usage,
+    word.satisfied_word_recall,
+    word.satisfied_definition_recall,
+    word.satisfied_typed_reverse_recall,
+  ].filter(Boolean).length;
 }
 
 export function buildNextQuestion(
@@ -116,7 +142,7 @@ export function buildNextQuestion(
 ): StudyQuestion | null {
   return buildNextScheduledQuestion({
     chunkSize: DAILY_CHUNK_SIZE,
-    getQuestionType: getNextUnsatisfiedQuestionType,
+    getQuestionType: getNextUnsatisfiedMasteryQuestionType,
     getWordPriority,
     isEligible: (word) => word.status !== "recall_ready",
     mode: "daily",
@@ -136,7 +162,7 @@ export function buildNextForeverReviewQuestion(
   return buildNextScheduledQuestion({
     chunkSize: FOREVER_REVIEW_CHUNK_SIZE,
     getQuestionType: (word) =>
-      getNextUnsatisfiedQuestionType(word) ??
+      getNextUnsatisfiedMasteryQuestionType(word) ??
       getReviewQuestionType(session, word),
     getWordPriority: getForeverReviewWordPriority,
     isEligible: () => true,
@@ -292,10 +318,32 @@ function getForeverReviewWordPriority(word: SessionWordWithWord) {
   return statusScore + attemptScore + freshnessScore;
 }
 
-function getNextUnsatisfiedQuestionType(word: SessionWordWithWord) {
-  return QUESTION_TYPES.find(
-    (questionType) => !isQuestionTypeSatisfied(word, questionType),
-  );
+function getNextUnsatisfiedMasteryQuestionType(word: SessionWordWithWord) {
+  if (!hasRecognitionMastery(word)) {
+    return "meaning_recognition";
+  }
+
+  if (!word.satisfied_sat_usage) {
+    return "sat_usage";
+  }
+
+  if (!word.satisfied_word_recall) {
+    return "word_recall";
+  }
+
+  if (!word.satisfied_definition_recall) {
+    return "definition_recall";
+  }
+
+  if (!word.satisfied_typed_reverse_recall) {
+    return "typed_reverse_recall";
+  }
+
+  return undefined;
+}
+
+function hasRecognitionMastery(word: SessionWordWithWord) {
+  return word.satisfied_meaning_recognition || word.satisfied_reverse_recall;
 }
 
 function getReviewQuestionType(
@@ -469,6 +517,18 @@ function createQuestion(
       prompt: `Which word means "${target.vocab_word.fast_meaning}"?`,
       helperText: "Choose the word.",
       options,
+    };
+  }
+
+  if (questionType === "typed_reverse_recall") {
+    return {
+      answerMode: "typed",
+      questionType,
+      targetSessionWordId: target.id,
+      targetVocabWordId: target.vocab_word_id,
+      prompt: `Which word means "${target.vocab_word.fast_meaning}"?`,
+      helperText: "Type the word.",
+      options: [],
     };
   }
 

@@ -68,6 +68,7 @@ export function sessionWord(
     satisfied_sat_usage: false,
     satisfied_definition_recall: false,
     satisfied_word_recall: false,
+    satisfied_typed_reverse_recall: false,
     session_id: "session-1",
     source: overrides.source ?? "new",
     status: "new",
@@ -92,6 +93,7 @@ export function satisfiedWord(
     satisfied_reverse_recall: true,
     satisfied_sat_usage: true,
     satisfied_word_recall: true,
+    satisfied_typed_reverse_recall: true,
     status: "recall_ready",
     ...overrides,
   });
@@ -118,6 +120,10 @@ export function unsatisfiedQuestionTypes(word: SessionWordWithWord) {
 
   if (!word.satisfied_definition_recall) {
     result.push("definition_recall");
+  }
+
+  if (!word.satisfied_typed_reverse_recall) {
+    result.push("typed_reverse_recall");
   }
 
   return result;

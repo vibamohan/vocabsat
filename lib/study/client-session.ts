@@ -80,6 +80,11 @@ type SeenWordRow = {
 
 export type DailySelectionMasteryRow = MasteryRow;
 
+type KnownMasteryRow = Pick<
+  DailySelectionMasteryRow,
+  "status" | "vocab_word_id"
+>;
+
 type SubmitMultipleChoiceAnswerInput = {
   attemptId: string;
   reviewGrade?: AnswerReviewGrade;
@@ -355,14 +360,19 @@ export async function getForeverReviewSummary(
   assertNoError(error, "Unable to load review words");
 
   const masteryRows = (data ?? []) as MasteryRow[];
+  const reviewableMasteryRows = masteryRows.filter(isReviewableMasteryRow);
 
   return {
-    dueCount: masteryRows.filter((row) => isDueForReview(row, studyDate)).length,
-    eligibleWordCount: masteryRows.length,
-    staleCount: masteryRows.filter((row) => isStaleForReview(row, studyDate))
-      .length,
+    dueCount: reviewableMasteryRows.filter((row) =>
+      isDueForReview(row, studyDate),
+    ).length,
+    eligibleWordCount: reviewableMasteryRows.length,
+    staleCount: reviewableMasteryRows.filter((row) =>
+      isStaleForReview(row, studyDate),
+    ).length,
     studyDate,
-    weakCount: masteryRows.filter((row) => row.status === "weak").length,
+    weakCount: reviewableMasteryRows.filter((row) => row.status === "weak")
+      .length,
   };
 }
 
@@ -455,7 +465,7 @@ export async function getForeverReviewView(
   const session = await startForeverReviewSession(supabase, userId);
   const words = await getSessionWords(supabase, userId, session.id);
   const recentAttempts = await getRecentAttempts(supabase, session.id);
-  const optionWords = await getQuestionOptionWords(supabase);
+  const optionWords = await getQuestionOptionWords(supabase, userId);
   const question = buildNextForeverReviewQuestion(
     session,
     words,
@@ -546,6 +556,7 @@ export async function replaceKnownLearnWord(
       satisfied_sat_usage: false,
       satisfied_definition_recall: false,
       satisfied_word_recall: false,
+      satisfied_typed_reverse_recall: false,
       source: "new",
       status: "new",
       vocab_word_id: replacementWord.id,
@@ -590,7 +601,7 @@ export async function submitAnswer(
 
   const words = await getSessionWords(supabase, userId, session.id);
   const recentAttempts = await getRecentAttempts(supabase, session.id);
-  const optionWords = await getQuestionOptionWords(supabase);
+  const optionWords = await getQuestionOptionWords(supabase, userId);
   const currentQuestion = buildNextQuestion(
     session,
     words,
@@ -695,7 +706,7 @@ export async function submitForeverReviewAnswer(
 
   const words = await getSessionWords(supabase, userId, session.id);
   const recentAttempts = await getRecentAttempts(supabase, session.id);
-  const optionWords = await getQuestionOptionWords(supabase);
+  const optionWords = await getQuestionOptionWords(supabase, userId);
   const currentQuestion = buildNextForeverReviewQuestion(
     session,
     words,
@@ -1000,6 +1011,7 @@ export async function resetTodaySession(
       satisfied_sat_usage: false,
       satisfied_definition_recall: false,
       satisfied_word_recall: false,
+      satisfied_typed_reverse_recall: false,
       status: "new",
     })
     .eq("session_id", session.id)
@@ -1119,7 +1131,7 @@ async function buildSessionView(
   }
 
   const recentAttempts = await getRecentAttempts(supabase, session.id);
-  const optionWords = await getQuestionOptionWords(supabase);
+  const optionWords = await getQuestionOptionWords(supabase, userId);
   const question = buildNextQuestion(session, words, recentAttempts, optionWords);
 
   if (!question) {
@@ -1352,15 +1364,32 @@ async function getSessionWords(
   return (data ?? []) as SessionWordWithWord[];
 }
 
-async function getQuestionOptionWords(supabase: SupabaseClient) {
-  const { data, error } = await supabase
-    .from("vocab_words")
-    .select("id, word, fast_meaning, example_sentence, sort_order")
-    .order("sort_order", { ascending: true });
+async function getQuestionOptionWords(
+  supabase: SupabaseClient,
+  userId: string,
+) {
+  const [
+    { data: wordData, error: wordError },
+    { data: masteryData, error: masteryError },
+  ] = await Promise.all([
+    supabase
+      .from("vocab_words")
+      .select("id, word, fast_meaning, example_sentence, sort_order")
+      .order("sort_order", { ascending: true }),
+    supabase
+      .from("user_word_mastery")
+      .select("vocab_word_id, status")
+      .eq("user_id", userId)
+      .eq("status", "known"),
+  ]);
 
-  assertNoError(error, "Unable to load question options");
+  assertNoError(wordError, "Unable to load question options");
+  assertNoError(masteryError, "Unable to load known words");
 
-  return (data ?? []) as VocabWord[];
+  return excludeKnownVocabWords(
+    (wordData ?? []) as VocabWord[],
+    (masteryData ?? []) as KnownMasteryRow[],
+  );
 }
 
 async function getSessionWordById(
@@ -1559,6 +1588,19 @@ export function getUnseenWordsByUserOrder(
   );
 }
 
+export function excludeKnownVocabWords(
+  words: VocabWord[],
+  masteryRows: KnownMasteryRow[],
+) {
+  const knownWordIds = new Set(
+    masteryRows
+      .filter((row) => row.status === "known")
+      .map((row) => row.vocab_word_id),
+  );
+
+  return words.filter((word) => !knownWordIds.has(word.id));
+}
+
 export function buildDailyWordSelection({
   masteryRows,
   seenSessionWordRows,
@@ -1584,7 +1626,9 @@ export function buildDailyWordSelection({
   );
   const selectedReviewWordIds = new Set<number>();
   const reviewWords = masteryRows
-    .filter((row) => wordsById.has(row.vocab_word_id))
+    .filter(
+      (row) => isReviewableMasteryRow(row) && wordsById.has(row.vocab_word_id),
+    )
     .sort((first, second) =>
       compareDailyReviewRows(first, second, studyDate, wordOrderRankById),
     )
@@ -1640,6 +1684,26 @@ async function selectWordsForForeverReview(
 
   const masteryRows = (masteryData ?? []) as MasteryRow[];
   const words = (wordData ?? []) as VocabWord[];
+
+  return buildForeverReviewWordSelection({
+    masteryRows,
+    studyDate,
+    userId,
+    words,
+  });
+}
+
+export function buildForeverReviewWordSelection({
+  masteryRows,
+  studyDate,
+  userId,
+  words,
+}: {
+  masteryRows: DailySelectionMasteryRow[];
+  studyDate: string;
+  userId: string;
+  words: VocabWord[];
+}) {
   const wordsById = new Map(words.map((word) => [word.id, word]));
   const wordOrderRankById = new Map<number, number>(
     words.map((word): [number, number] => [
@@ -1649,7 +1713,9 @@ async function selectWordsForForeverReview(
   );
 
   return masteryRows
-    .filter((row) => wordsById.has(row.vocab_word_id))
+    .filter(
+      (row) => isReviewableMasteryRow(row) && wordsById.has(row.vocab_word_id),
+    )
     .sort((first, second) => {
       const firstScore = getForeverReviewMasteryPriority(first, studyDate);
       const secondScore = getForeverReviewMasteryPriority(second, studyDate);
@@ -1670,9 +1736,15 @@ async function selectWordsForForeverReview(
     })
     .map((row) => ({
       masteryStatus: row.status,
-      source: "review",
+      source: "review" as const,
       word: wordsById.get(row.vocab_word_id) as VocabWord,
     }));
+}
+
+export function isReviewableMasteryRow(
+  row: Pick<DailySelectionMasteryRow, "status">,
+) {
+  return row.status !== "known";
 }
 
 function getQuestionCap(wordCount: number) {
@@ -1686,6 +1758,7 @@ function getInitialSessionWordState(entry: SelectedSessionWord) {
     satisfied_sat_usage: false,
     satisfied_definition_recall: false,
     satisfied_word_recall: false,
+    satisfied_typed_reverse_recall: false,
     source: entry.source,
     status: "new" as const,
   };
@@ -1718,6 +1791,7 @@ function getInitialForeverReviewWordState(entry: SelectedSessionWord) {
     satisfied_sat_usage: isReady,
     satisfied_definition_recall: isReady,
     satisfied_word_recall: isReady,
+    satisfied_typed_reverse_recall: isReady,
     source: "review" as const,
     status: isReady ? ("recall_ready" as const) : ("shaky" as const),
   };
@@ -2068,6 +2142,10 @@ function getSatisfiedUpdate(questionType: QuestionType) {
     return { satisfied_word_recall: true };
   }
 
+  if (questionType === "typed_reverse_recall") {
+    return { satisfied_typed_reverse_recall: true };
+  }
+
   return { satisfied_definition_recall: true };
 }
 
@@ -2102,6 +2180,11 @@ async function updateMasteryAfterAttempt(
   assertNoError(error, "Unable to load word mastery");
 
   const existing = data as MasteryRow | null;
+
+  if (existing?.status === "known") {
+    return;
+  }
+
   const nextStatus: UserWordStatus = result.isRecallReady
     ? "recall_ready"
     : result.isCorrect && !result.guessed
@@ -2142,11 +2225,41 @@ async function markWordAlreadyKnown(
   userId: string,
   vocabWordId: number,
 ) {
-  await updateMasteryAfterAttempt(supabase, userId, vocabWordId, {
-    guessed: false,
-    isCorrect: true,
-    isRecallReady: true,
-  });
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("user_word_mastery")
+    .select(
+      "user_id, vocab_word_id, status, correct_count, miss_count, guessed_count, last_seen_at, last_ready_at, next_review_on, review_interval_days",
+    )
+    .eq("user_id", userId)
+    .eq("vocab_word_id", vocabWordId)
+    .maybeSingle();
+
+  assertNoError(error, "Unable to load word mastery");
+
+  const existing = data as MasteryRow | null;
+  const { error: upsertError } = await supabase
+    .from("user_word_mastery")
+    .upsert(
+      {
+        correct_count:
+          existing?.status === "known"
+            ? (existing.correct_count ?? 0)
+            : (existing?.correct_count ?? 0) + 1,
+        guessed_count: existing?.guessed_count ?? 0,
+        last_ready_at: now,
+        last_seen_at: now,
+        miss_count: existing?.miss_count ?? 0,
+        next_review_on: null,
+        review_interval_days: existing?.review_interval_days ?? 0,
+        status: "known",
+        user_id: userId,
+        vocab_word_id: vocabWordId,
+      },
+      { onConflict: "user_id,vocab_word_id" },
+    );
+
+  assertNoError(upsertError, "Unable to mark word as already known");
 }
 
 async function touchMasterySeen(

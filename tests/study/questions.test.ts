@@ -30,9 +30,14 @@ describe("question helpers", () => {
         sessionWord({
           satisfied_meaning_recognition: true,
           satisfied_sat_usage: true,
+          satisfied_typed_reverse_recall: true,
         }),
       ),
-    ).toEqual(["meaning_recognition", "sat_usage"]);
+    ).toEqual([
+      "meaning_recognition",
+      "sat_usage",
+      "typed_reverse_recall",
+    ]);
   });
 
   test("requires all question types for recall readiness", () => {
@@ -44,6 +49,20 @@ describe("question helpers", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  test("treats either recognition direction as satisfying recognition mastery", () => {
+    expect(
+      isRecallReady(
+        sessionWord({
+          satisfied_reverse_recall: true,
+          satisfied_sat_usage: true,
+          satisfied_word_recall: true,
+          satisfied_definition_recall: true,
+          satisfied_typed_reverse_recall: true,
+        }),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -74,20 +93,20 @@ describe("daily question building", () => {
     });
   });
 
-  test("uses word labels for reverse recall options", () => {
+  test("skips reverse recall after meaning recognition is satisfied", () => {
     const word = sessionWord({
       satisfied_meaning_recognition: true,
-      word: { fast_meaning: "quietly skilled", word: "adept" },
+      word: {
+        example_sentence: "The adept reply ended the debate.",
+        fast_meaning: "quietly skilled",
+        word: "adept",
+      },
     });
 
     const question = buildNextQuestion(studySession(), [word], null);
 
-    expect(question?.questionType).toBe("reverse_recall");
-    expect(question?.prompt).toBe('Which word means "quietly skilled"?');
-    expect(question?.options).toContainEqual({
-      label: "adept",
-      vocabWordId: word.vocab_word_id,
-    });
+    expect(question?.questionType).toBe("sat_usage");
+    expect(question?.prompt).toBe("The ______ reply ended the debate.");
   });
 
   test("blanks the target word in SAT usage prompts", () => {
@@ -143,6 +162,24 @@ describe("daily question building", () => {
       answerMode: "typed",
       questionType: "definition_recall",
       prompt: "What does terse mean?",
+    });
+  });
+
+  test("asks typed reverse recall after definition recall is satisfied", () => {
+    const word = sessionWord({
+      satisfied_meaning_recognition: true,
+      satisfied_sat_usage: true,
+      satisfied_word_recall: true,
+      satisfied_definition_recall: true,
+      word: { fast_meaning: "brief", word: "terse" },
+    });
+
+    const question = buildNextQuestion(studySession(), [word], null);
+
+    expect(question).toMatchObject({
+      answerMode: "typed",
+      questionType: "typed_reverse_recall",
+      prompt: 'Which word means "brief"?',
     });
   });
 
@@ -603,6 +640,23 @@ describe("typed answer grading", () => {
       ),
     ).toBe("incorrect");
   });
+
+  test("grades typed reverse recall with normalized exact word matching", () => {
+    expect(
+      gradeTypedAnswer(
+        "typed_reverse_recall",
+        vocabWord({ word: "Terse" }),
+        " terse! ",
+      ),
+    ).toBe("correct");
+    expect(
+      gradeTypedAnswer(
+        "typed_reverse_recall",
+        vocabWord({ word: "terse" }),
+        "brief",
+      ),
+    ).toBe("incorrect");
+  });
 });
 
 describe("forever review question building", () => {
@@ -622,6 +676,28 @@ describe("forever review question building", () => {
     );
 
     expect(question?.targetSessionWordId).toBe(word.id);
+  });
+
+  test("rotates typed reverse recall into review-ready words normally", () => {
+    const word = satisfiedWord({
+      source: "review",
+      word: { fast_meaning: "brief", word: "terse" },
+    });
+
+    const question = buildNextForeverReviewQuestion(
+      studySession({
+        session_type: "forever_review",
+        total_questions_answered: 5,
+      }),
+      [word],
+      null,
+    );
+
+    expect(question).toMatchObject({
+      answerMode: "typed",
+      questionType: "typed_reverse_recall",
+      prompt: 'Which word means "brief"?',
+    });
   });
 
   test("prioritizes weak review words", () => {

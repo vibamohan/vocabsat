@@ -1,4 +1,8 @@
-import { QUESTION_TYPES, type SessionWordWithWord } from "@/lib/study/types";
+import {
+  getCompletedMasteryStepCount,
+  getMasteryStepCount,
+} from "@/lib/study/questions";
+import type { SessionWordWithWord } from "@/lib/study/types";
 
 export type StudyProgress = {
   completedUnits: number;
@@ -14,15 +18,16 @@ export type StudyProgress = {
 };
 
 export function getStudyProgress(words: SessionWordWithWord[]): StudyProgress {
-  const totalUnits = words.length * QUESTION_TYPES.length;
+  const masteryStepCount = getMasteryStepCount();
+  const totalUnits = words.length * masteryStepCount;
   const wordProgress = words.map((word) => {
     const completedUnits = getCompletedUnits(word);
 
     return {
       completedUnits,
       id: word.id,
-      percent: getPercent(completedUnits, QUESTION_TYPES.length),
-      totalUnits: QUESTION_TYPES.length,
+      percent: getPercent(completedUnits, masteryStepCount),
+      totalUnits: masteryStepCount,
     };
   });
   const completedUnits = wordProgress.reduce(
@@ -40,17 +45,7 @@ export function getStudyProgress(words: SessionWordWithWord[]): StudyProgress {
 }
 
 function getCompletedUnits(word: SessionWordWithWord) {
-  if (word.status === "recall_ready") {
-    return QUESTION_TYPES.length;
-  }
-
-  return [
-    word.satisfied_meaning_recognition,
-    word.satisfied_reverse_recall,
-    word.satisfied_sat_usage,
-    word.satisfied_word_recall,
-    word.satisfied_definition_recall,
-  ].filter(Boolean).length;
+  return getCompletedMasteryStepCount(word);
 }
 
 function getPercent(completedUnits: number, totalUnits: number) {

@@ -7,6 +7,7 @@ import {
   applyOptimisticForeverReviewAnswer,
   applyOptimisticForeverReviewGuess,
   applyOptimisticGuess,
+  applyOptimisticTypedAnswer,
   buildMultipleChoiceAnswerReview,
   buildTypedAnswerReview,
 } from "@/lib/study/optimistic-session";
@@ -141,6 +142,7 @@ describe("optimistic daily answers", () => {
       satisfied_meaning_recognition: true,
       satisfied_reverse_recall: true,
       satisfied_word_recall: true,
+      satisfied_typed_reverse_recall: true,
     });
     const question = studyQuestion({
       questionType: "sat_usage",
@@ -171,22 +173,24 @@ describe("optimistic daily answers", () => {
   test("completes the session when the final requirement is satisfied", () => {
     const word = sessionWord({
       satisfied_definition_recall: true,
-      satisfied_reverse_recall: true,
+      satisfied_meaning_recognition: true,
       satisfied_sat_usage: true,
       satisfied_word_recall: true,
+      word: { word: "terse" },
     });
     const question = studyQuestion({
-      questionType: "meaning_recognition",
+      answerMode: "typed",
+      options: [],
+      questionType: "typed_reverse_recall",
       targetSessionWordId: word.id,
       targetVocabWordId: word.vocab_word_id,
     });
     const view = questionView({ question, words: [word] });
 
-    const result = applyOptimisticAnswer(
+    const result = applyOptimisticTypedAnswer(
       view,
       question,
-      word.vocab_word_id,
-      "attempt-1",
+      "terse",
       "2026-05-20T12:10:00.000Z",
     );
 
@@ -247,6 +251,7 @@ describe("optimistic daily guess checks", () => {
       satisfied_meaning_recognition: true,
       satisfied_reverse_recall: true,
       satisfied_word_recall: true,
+      satisfied_typed_reverse_recall: true,
     });
     const question = studyQuestion({
       questionType: "sat_usage",
@@ -280,6 +285,7 @@ describe("optimistic daily guess checks", () => {
       satisfied_meaning_recognition: true,
       satisfied_reverse_recall: true,
       satisfied_word_recall: true,
+      satisfied_typed_reverse_recall: true,
     });
     const question = studyQuestion({
       questionType: "sat_usage",
@@ -525,6 +531,7 @@ describe("optimistic forever review", () => {
       satisfied_meaning_recognition: true,
       satisfied_reverse_recall: true,
       satisfied_word_recall: true,
+      satisfied_typed_reverse_recall: true,
       status: "shaky",
     });
     const question = studyQuestion({

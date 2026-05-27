@@ -14,12 +14,13 @@ describe("study progress", () => {
     });
   });
 
-  test("counts satisfied question types for active words", () => {
+  test("counts satisfied mastery steps for active words", () => {
     const progress = getStudyProgress([
       sessionWord({
         id: "word-1",
         satisfied_meaning_recognition: true,
         satisfied_reverse_recall: true,
+        satisfied_sat_usage: true,
       }),
     ]);
 
@@ -50,6 +51,7 @@ describe("study progress", () => {
       sessionWord({
         id: "word-1",
         satisfied_meaning_recognition: true,
+        satisfied_reverse_recall: true,
       }),
       satisfiedWord({ id: "word-2", vocab_word_id: 2, word: { id: 2 } }),
     ]);
