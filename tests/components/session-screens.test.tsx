@@ -331,13 +331,15 @@ describe("study session screens", () => {
     await user.click(screen.getByRole("button", { name: "Continue" }));
 
     expect(screen.getByText("Correct")).toBeInTheDocument();
+    expect(screen.getByText("Question")).toBeInTheDocument();
+    expect(screen.getByText("Terse most nearly means:")).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Mark right" }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Mark wrong" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Unsure" })).toBeInTheDocument();
-    expect(screen.getAllByText("Terse")).toHaveLength(1);
     expect(screen.getAllByText("brief")).toHaveLength(1);
+    expect(screen.getByText("Term: Terse")).toBeInTheDocument();
     expect(onGrade).toHaveBeenCalledWith("correct");
   });
 
@@ -367,6 +369,11 @@ describe("study session screens", () => {
     );
 
     expect(screen.getByText("Incorrect")).toBeInTheDocument();
+    expect(screen.getByText("detailed")).toBeInTheDocument();
+    expect(screen.getByText("Term: Verbose")).toBeInTheDocument();
+    expect(screen.getByText("Correct answer")).toBeInTheDocument();
+    expect(screen.getByText("brief")).toBeInTheDocument();
+    expect(screen.getByText("Term: Terse")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Continue" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Mark right" })).toBeInTheDocument();
     expect(
@@ -375,6 +382,35 @@ describe("study session screens", () => {
     expect(
       screen.queryByRole("button", { name: "Unsure" }),
     ).not.toBeInTheDocument();
+  });
+
+  test("keeps word choices as the primary answer review text", () => {
+    render(
+      <AnswerReviewScreen
+        onGrade={vi.fn()}
+        review={answerReview({
+          question: {
+            ...questionView().question,
+            helperText: "Choose the word.",
+            prompt: 'Which word means "brief"?',
+            questionType: "reverse_recall",
+          },
+          selectedVocabWordId: 2,
+          selectedWord: sessionWord({
+            vocab_word_id: 2,
+            word: { fast_meaning: "detailed", id: 2, word: "verbose" },
+          }).vocab_word,
+          systemGrade: "incorrect",
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Verbose")).toBeInTheDocument();
+    expect(screen.getByText("detailed")).toBeInTheDocument();
+    expect(screen.getByText("Correct answer")).toBeInTheDocument();
+    expect(screen.getByText("Terse")).toBeInTheDocument();
+    expect(screen.getByText("brief")).toBeInTheDocument();
+    expect(screen.queryByText("Term: Verbose")).not.toBeInTheDocument();
   });
 
   test("continues from an unsure typed answer review", async () => {

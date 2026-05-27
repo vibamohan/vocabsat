@@ -379,12 +379,18 @@ export function AnswerReviewScreen({
           </Badge>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Question
+            </p>
+            <p className="leading-relaxed">{review.question.prompt}</p>
+          </div>
           {shouldShowSelectedChoice && review.selectedWord ? (
             <>
-              <AnswerContrast
+              <AnswerReviewChoice
                 label="You chose"
-                meaning={review.selectedWord.fast_meaning}
-                word={review.selectedWord.word}
+                questionType={review.question.questionType}
+                word={review.selectedWord}
               />
             </>
           ) : null}
@@ -399,10 +405,10 @@ export function AnswerReviewScreen({
             </>
           ) : null}
           {shouldShowCorrectWord ? (
-            <AnswerContrast
+            <AnswerReviewChoice
               label="Correct answer"
-              meaning={word.vocab_word.fast_meaning}
-              word={word.vocab_word.word}
+              questionType={review.question.questionType}
+              word={word.vocab_word}
             />
           ) : null}
           {shouldShowMeaningOnly ? (
@@ -469,10 +475,12 @@ export function AnswerReviewScreen({
 function AnswerContrast({
   label,
   meaning,
+  preserveWordCase = false,
   word,
 }: {
   label: string;
   meaning: string;
+  preserveWordCase?: boolean;
   word: string;
 }) {
   return (
@@ -481,10 +489,41 @@ function AnswerContrast({
         {label}
       </p>
       <div className="flex flex-col gap-1">
-        <p className="text-xl font-semibold leading-snug">{capitalize(word)}</p>
+        <p className="text-xl font-semibold leading-snug">
+          {preserveWordCase ? word : capitalize(word)}
+        </p>
         <p className="leading-relaxed text-muted-foreground">{meaning}</p>
       </div>
     </div>
+  );
+}
+
+function AnswerReviewChoice({
+  label,
+  questionType,
+  word,
+}: {
+  label: string;
+  questionType: StudyQuestion["questionType"];
+  word: SessionWordWithWord["vocab_word"];
+}) {
+  if (questionType === "meaning_recognition") {
+    return (
+      <AnswerContrast
+        label={label}
+        meaning={`Term: ${capitalize(word.word)}`}
+        preserveWordCase
+        word={word.fast_meaning}
+      />
+    );
+  }
+
+  return (
+    <AnswerContrast
+      label={label}
+      meaning={word.fast_meaning}
+      word={word.word}
+    />
   );
 }
 
