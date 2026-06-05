@@ -29,8 +29,13 @@ function reviewedWord(overrides: Partial<ReviewedWord> = {}): ReviewedWord {
   };
 }
 
-function reviewedWordRow(overrides: Partial<ReviewedWordRow> = {}): ReviewedWordRow {
-  const word = overrides.vocab_word ?? vocabWord({ id: overrides.vocab_word_id });
+function reviewedWordRow(
+  overrides: Partial<ReviewedWordRow> = {},
+): ReviewedWordRow {
+  const overrideWord = overrides.vocab_word;
+  const word = Array.isArray(overrideWord)
+    ? overrideWord[0] ?? vocabWord({ id: overrides.vocab_word_id })
+    : overrideWord ?? vocabWord({ id: overrides.vocab_word_id });
 
   return {
     correct_count: 1,
@@ -57,6 +62,21 @@ describe("reviewed word helpers", () => {
 
     expect(mapReviewedWordRows(rows).map((word) => word.vocab_word_id)).toEqual([
       1,
+    ]);
+  });
+
+  test("maps Supabase relation arrays to the joined vocabulary word", () => {
+    const joinedWord = vocabWord({ id: 4, word: "abstruse" });
+
+    expect(
+      mapReviewedWordRows([
+        reviewedWordRow({ vocab_word: [joinedWord], vocab_word_id: 4 }),
+      ]),
+    ).toEqual([
+      expect.objectContaining({
+        vocab_word: joinedWord,
+        vocab_word_id: 4,
+      }),
     ]);
   });
 

@@ -23,13 +23,17 @@ export type ReviewedWordRow = {
   next_review_on: string | null;
   review_interval_days: number;
   status: UserWordStatus;
-  vocab_word: VocabWord | null;
+  vocab_word: VocabWord | VocabWord[] | null;
   vocab_word_id: number;
 };
 
 export function mapReviewedWordRows(rows: ReviewedWordRow[]): ReviewedWord[] {
   return rows.flatMap((row) => {
-    if (!row.last_seen_at || !row.vocab_word) {
+    const vocabWord = Array.isArray(row.vocab_word)
+      ? row.vocab_word[0]
+      : row.vocab_word;
+
+    if (!row.last_seen_at || !vocabWord) {
       return [];
     }
 
@@ -43,7 +47,7 @@ export function mapReviewedWordRows(rows: ReviewedWordRow[]): ReviewedWord[] {
         next_review_on: row.next_review_on,
         review_interval_days: row.review_interval_days,
         status: row.status,
-        vocab_word: row.vocab_word,
+        vocab_word: vocabWord,
         vocab_word_id: row.vocab_word_id,
       },
     ];
