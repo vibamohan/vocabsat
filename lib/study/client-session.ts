@@ -19,6 +19,10 @@ import {
   isRecallReady,
 } from "@/lib/study/questions";
 import { getStudyProgress } from "@/lib/study/progress";
+import {
+  mapReviewedWordRows,
+  type ReviewedWordRow,
+} from "@/lib/study/reviewed-words";
 import type {
   AnswerConfidence,
   AnswerReviewGrade,
@@ -30,6 +34,7 @@ import type {
   LatestAttempt,
   PendingGuess,
   QuestionType,
+  ReviewedWord,
   SessionWordSource,
   SessionStats,
   SessionView,
@@ -374,6 +379,41 @@ export async function getForeverReviewSummary(
     weakCount: reviewableMasteryRows.filter((row) => row.status === "weak")
       .length,
   };
+}
+
+export async function getReviewedWords(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<ReviewedWord[]> {
+  const { data, error } = await supabase
+    .from("user_word_mastery")
+    .select(
+      `
+        vocab_word_id,
+        status,
+        correct_count,
+        miss_count,
+        guessed_count,
+        last_seen_at,
+        last_ready_at,
+        next_review_on,
+        review_interval_days,
+        vocab_word:vocab_words (
+          id,
+          word,
+          fast_meaning,
+          example_sentence,
+          sort_order
+        )
+      `,
+    )
+    .eq("user_id", userId)
+    .not("last_seen_at", "is", null)
+    .order("last_seen_at", { ascending: false });
+
+  assertNoError(error, "Unable to load reviewed words");
+
+  return mapReviewedWordRows((data ?? []) as ReviewedWordRow[]);
 }
 
 export async function startForeverReviewSession(

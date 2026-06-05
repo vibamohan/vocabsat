@@ -109,6 +109,21 @@ beforeEach(() => {
 });
 
 describe("DashboardClient", () => {
+  test("shows the reviewed words card below review", async () => {
+    mocks.getTodaySessionSummary.mockResolvedValueOnce(activeSession());
+
+    render(<DashboardClient />);
+
+    expect(await screen.findByText("Words")).toBeInTheDocument();
+    expect(
+      screen.getByText("Browse reviewed words and meanings."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Browse words" })).toHaveAttribute(
+      "href",
+      "/words",
+    );
+  });
+
   test("reloads the daily card and clears stale opening state when returning to the dashboard", async () => {
     const user = userEvent.setup();
     const startRequest = deferred<void>();

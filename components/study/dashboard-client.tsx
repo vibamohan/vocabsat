@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ForeverReviewCard } from "@/components/study/forever-review-card";
 import { StudyAppShell } from "@/components/study/app-shell";
 import { TodaySessionCard } from "@/components/study/today-session-card";
+import { WordsCard } from "@/components/study/words-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   getCurrentUser,
@@ -159,6 +160,7 @@ export function DashboardClient() {
               onStart={handleStartReview}
               summary={reviewSummary}
             />
+            <WordsCard />
           </>
         )}
       </section>

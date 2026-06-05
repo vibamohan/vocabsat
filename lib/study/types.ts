@@ -159,6 +159,19 @@ export type ForeverReviewSummary = {
   weakCount: number;
 };
 
+export type ReviewedWord = {
+  correct_count: number;
+  guessed_count: number;
+  last_ready_at: string | null;
+  last_seen_at: string;
+  miss_count: number;
+  next_review_on: string | null;
+  review_interval_days: number;
+  status: UserWordStatus;
+  vocab_word: VocabWord;
+  vocab_word_id: number;
+};
+
 export type SessionStats = {
   extraReviewCount: number;
   learnedCount: number;
