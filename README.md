@@ -1,98 +1,63 @@
 # VocabSAT
 
-A focused Next.js + Supabase MVP for daily SAT vocabulary recall.
+VocabSAT is a focused SAT vocabulary trainer built around daily recall, fast feedback, and spaced review. It gives each authenticated user a small daily set of hard SAT-style words, tests them with mixed question types, and keeps missed or guessed words in rotation until they are recall-ready.
 
-The app does one thing: an authenticated user starts today's session, learns a
-small set of hard SAT-plausible words, answers mixed recall questions, reviews
-misses immediately, and finishes when every word is recall-ready or the question
-cap is reached.
+## What It Does
 
-## Stack
+- Runs a daily study session with 5-7 new words per user.
+- Mixes recognition, reverse recall, typed recall, definition recall, and SAT-style usage questions.
+- Shows corrections immediately after wrong answers.
+- Asks users to mark whether correct SAT-style answers were known or guessed.
+- Tracks word mastery across sessions and supports long-term review.
+- Persists progress with Supabase Auth, Postgres, RLS, and typed client-side session logic.
 
-- Next.js App Router + TypeScript
-- Supabase Auth + Postgres with RLS
-- shadcn/ui components
+## Why It Matters
+
+This project is designed as a practical learning product, not a flashcard demo. The app manages authenticated user progress, deterministic word selection, adaptive question scheduling, answer history, reset behavior, and review checkpoints while keeping the interface simple enough for repeated daily use.
+
+## Tech Stack
+
+- Next.js App Router
+- TypeScript
+- Supabase Auth and Postgres with RLS
+- shadcn/ui
 - Tailwind CSS
+- Vitest and Testing Library
 
-## Environment
+## Key Routes
 
-Create `.env.local` with the public Supabase values from Project Settings > API:
+- `/dashboard`: daily session status, forever review, and saved words
+- `/session`: daily learn, practice, correction, guess check, and completion flow
+- `/review`: ongoing review for previously seen words
+- `/words`: vocabulary progress view
+
+## Local Setup
+
+Create `.env.local` with your Supabase public project values:
 
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-publishable-or-anon-key
 ```
 
-Optional client-side tuning:
+Optional tuning:
 
 ```bash
 NEXT_PUBLIC_DAILY_WORD_COUNT=6
 NEXT_PUBLIC_STUDY_TIME_ZONE=America/Los_Angeles
 ```
 
-`NEXT_PUBLIC_DAILY_WORD_COUNT` is bounded to 5-7 for the MVP.
+Apply the Supabase SQL files in order:
 
-## Supabase Setup
+1. Run every file in `supabase/migrations/` by filename.
+2. Run `supabase/seed.sql`.
+3. Add your local app URL to Supabase Auth settings.
 
-This repo includes the initial database infrastructure:
-
-- `supabase/migrations/202605140001_today_session_mvp.sql`
-- `supabase/migrations/202605140002_allow_session_attempt_reset.sql`
-- `supabase/seed.sql`
-- `scripts/build-vocab-seed.mjs`
-- `sat_300_plus_vocab_dataset.csv`
-
-For a fresh hosted Supabase project, the most direct setup path is:
-
-1. Open the Supabase SQL Editor.
-2. Run every migration SQL file in `supabase/migrations/` in filename order.
-3. Run the seed SQL in `supabase/seed.sql`.
-4. In Auth settings, make sure your local URL is allowed while developing.
-
-If the CSV changes, regenerate the seed SQL:
+## Development
 
 ```bash
-npm run seed:build
+npm run lint
+npm run test
 ```
 
-## Data Model
-
-- `vocab_words`: seeded SAT word bank. `example_sentence` may contain multiple
-  examples separated by `|`; the app parses them before display.
-- `study_sessions`: user-owned session state per study date and session type
-  (`daily` or `forever_review`).
-- `study_session_words`: per-session word status and satisfied question types.
-- `study_question_attempts`: immutable answer history.
-- `user_word_mastery`: cross-session weak/learning/ready state for future selection.
-
-RLS is enabled on study tables. Authenticated users can read seeded vocabulary
-and can only read/write their own study rows.
-
-## App Flow
-
-- `/` redirects authenticated users to `/dashboard`, otherwise to `/auth/login`.
-- `/dashboard` shows Today first, with a secondary Forever Review card below it.
-- `/session` runs Learn, Practice, Correction, Guess Check, and Completion
-  screens.
-- `/review` runs optional endless review for words the user has already seen,
-  with correction, guess check, and 10-question checkpoints.
-
-Auth and study mutations run through the browser Supabase client. RLS and table
-constraints are the guardrails; the MVP does not try to prevent users from
-modifying their own study progress.
-
-## Manual Acceptance Checks
-
-- Fresh user signs up or logs in and sees the Today Session card.
-- Start creates one daily session with 5-7 seeded words from the user's deterministic word order.
-- Learn cards advance into mixed practice.
-- Wrong answers show a compact correction and return later.
-- Correct SAT-style usage asks "Knew it" vs "Guessed".
-- "Guessed" keeps the word shaky.
-- A word becomes recall-ready only after known correct answers for all three
-  question types.
-- Session completes when all words are recall-ready or the 45-question cap is
-  reached.
-- Refreshing `/dashboard` or `/session` continues the current day's session.
-- Forever Review uses only previously seen words and shows a checkpoint every 10
-  questions.
+The app requires `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` before running locally.
