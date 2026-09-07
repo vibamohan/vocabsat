@@ -197,6 +197,21 @@ describe("daily word selection helpers", () => {
     ).toEqual([2]);
   });
 
+  test("does not select review words before their due date", () => {
+    const words = [vocabWord({ id: 1 }), vocabWord({ id: 2 })];
+    const selectedWords = buildDailyWordSelection({
+      masteryRows: [
+        masteryRow({ next_review_on: "2026-05-25", vocab_word_id: 1 }),
+      ],
+      seenSessionWordRows: [],
+      studyDate: "2026-05-20",
+      userId: "user-1",
+      words,
+    });
+
+    expect(selectedWords.map((entry) => entry.word.id)).toEqual([2]);
+  });
+
   test("identifies known mastery rows as not reviewable", () => {
     expect(isReviewableMasteryRow(masteryRow({ vocab_word_id: 1 }))).toBe(true);
     expect(

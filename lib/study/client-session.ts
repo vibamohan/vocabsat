@@ -19,6 +19,8 @@ import {
   isRecallReady,
 } from "@/lib/study/questions";
 import { getStudyProgress } from "@/lib/study/progress";
+import { scheduleFsrsReview } from "@/lib/study/fsrs";
+import { getSchedulerRating } from "@/lib/study/scheduler-rating";
 import {
   mapReviewedWordRows,
   type ReviewedWordRow,
@@ -62,6 +64,15 @@ type MasteryRow = {
   last_ready_at: string | null;
   next_review_on: string | null;
   review_interval_days: number;
+  fsrs_due?: string | null;
+  fsrs_stability?: number | null;
+  fsrs_difficulty?: number | null;
+  fsrs_elapsed_days?: number;
+  fsrs_scheduled_days?: number;
+  fsrs_reps?: number;
+  fsrs_lapses?: number;
+  fsrs_state?: number;
+  fsrs_last_review?: string | null;
 };
 
 type AttemptRow = {
@@ -96,6 +107,7 @@ type SubmitMultipleChoiceAnswerInput = {
   sessionWordId: string;
   questionType: QuestionType;
   selectedVocabWordId: number;
+  timing?: SubmitAnswerTiming;
 };
 
 type SubmitTypedAnswerInput = {
@@ -105,6 +117,15 @@ type SubmitTypedAnswerInput = {
   questionType: QuestionType;
   typedAnswer: string;
   selfGrade?: DefinitionSelfGrade;
+  timing?: SubmitAnswerTiming;
+};
+
+type SubmitAnswerTiming = {
+  answeredAt: string;
+  responseTimeMs: number;
+  shownAt: string;
+  timedMode?: boolean;
+  timedOut?: boolean;
 };
 
 type SubmitAnswerInput =
@@ -403,7 +424,16 @@ export async function getReviewedWords(
           word,
           fast_meaning,
           example_sentence,
-          sort_order
+          sort_order,
+          roots,
+          prefixes,
+          suffixes,
+          etymology,
+          confusable_words,
+          image_path,
+          image_alt,
+          image_attribution,
+          image_source_url
         )
       `,
     )
@@ -654,6 +684,11 @@ export async function submitAnswer(
   }
 
   const answer = getSubmittedAnswer(input, sessionWord);
+  const schedulerRating = getSchedulerRatingForAnswer(
+    sessionWord,
+    input.questionType,
+    answer.wordOutcome,
+  );
   const shouldAskGuess =
     !input.reviewGrade &&
     answer.isCorrect &&
@@ -670,10 +705,16 @@ export async function submitAnswer(
         answer.confidence ??
         (answer.isCorrect && !shouldAskGuess ? "known" : null),
       is_correct: answer.isCorrect,
+      answered_at: input.timing?.answeredAt,
       question_type: input.questionType,
       selected_vocab_word_id: answer.selectedVocabWordId,
       session_id: session.id,
       session_word_id: sessionWord.id,
+      shown_at: input.timing?.shownAt,
+      response_time_ms: input.timing?.responseTimeMs,
+      scheduler_rating: schedulerRating,
+      timed_mode: input.timing?.timedMode ?? false,
+      timed_out: input.timing?.timedOut ?? false,
       typed_answer: answer.typedAnswer,
       user_id: userId,
       vocab_word_id: sessionWord.vocab_word_id,
@@ -759,6 +800,11 @@ export async function submitForeverReviewAnswer(
   }
 
   const answer = getSubmittedAnswer(input, sessionWord);
+  const schedulerRating = getSchedulerRatingForAnswer(
+    sessionWord,
+    input.questionType,
+    answer.wordOutcome,
+  );
   const shouldAskGuess =
     !input.reviewGrade &&
     answer.isCorrect &&
@@ -774,10 +820,16 @@ export async function submitForeverReviewAnswer(
         answer.confidence ??
         (answer.isCorrect && !shouldAskGuess ? "known" : null),
       is_correct: answer.isCorrect,
+      answered_at: input.timing?.answeredAt,
       question_type: input.questionType,
       selected_vocab_word_id: answer.selectedVocabWordId,
       session_id: session.id,
       session_word_id: sessionWord.id,
+      shown_at: input.timing?.shownAt,
+      response_time_ms: input.timing?.responseTimeMs,
+      scheduler_rating: schedulerRating,
+      timed_mode: input.timing?.timedMode ?? false,
+      timed_out: input.timing?.timedOut ?? false,
       typed_answer: answer.typedAnswer,
       user_id: userId,
       vocab_word_id: sessionWord.vocab_word_id,
@@ -823,6 +875,69 @@ export async function submitForeverReviewAnswer(
   }
 
   return { outcome: "continue" };
+}
+
+export async function submitTimedOutAnswer(
+  supabase: SupabaseClient,
+  userId: string,
+  input: {
+    attemptId: string;
+    questionType: QuestionType;
+    sessionWordId: string;
+    timing: SubmitAnswerTiming;
+  },
+) {
+  const sessionWord = await getSessionWordById(supabase, userId, input.sessionWordId);
+  const session = await getSessionById(supabase, userId, sessionWord.session_id);
+
+  if (session.phase !== "practice") {
+    throw new Error("This session is not ready for practice.");
+  }
+
+  const words = await getSessionWords(supabase, userId, session.id);
+  const recentAttempts = await getRecentAttempts(supabase, session.id);
+  const optionWords = await getQuestionOptionWords(supabase, userId);
+  const question = session.session_type === "forever_review"
+    ? buildNextForeverReviewQuestion(session, words, recentAttempts, optionWords)
+    : buildNextQuestion(session, words, recentAttempts, optionWords);
+
+  if (
+    !question ||
+    question.targetSessionWordId !== input.sessionWordId ||
+    question.questionType !== input.questionType
+  ) {
+    throw new Error("This timeout no longer matches the active question.");
+  }
+
+  const { error } = await supabase.from("study_question_attempts").insert({
+    answer_mode: question.answerMode,
+    answered_at: input.timing.answeredAt,
+    confidence: null,
+    id: input.attemptId,
+    is_correct: false,
+    question_type: input.questionType,
+    response_time_ms: input.timing.responseTimeMs,
+    scheduler_rating: sessionWord.scheduler_rating_applied
+      ? null
+      : getSchedulerRating("incorrect"),
+    selected_vocab_word_id: null,
+    session_id: session.id,
+    session_word_id: sessionWord.id,
+    shown_at: input.timing.shownAt,
+    timed_mode: true,
+    timed_out: true,
+    typed_answer: null,
+    user_id: userId,
+    vocab_word_id: sessionWord.vocab_word_id,
+  });
+
+  assertNoError(error, "Unable to record the timeout");
+  await incrementSessionQuestionCount(supabase, userId, session);
+  await markWordMissed(supabase, userId, sessionWord, input.questionType);
+
+  if (session.session_type === "daily") {
+    await reconcileCompletionAfterAttempt(supabase, userId, session.id);
+  }
 }
 
 function doesSubmittedAnswerMatchQuestion(
@@ -908,6 +1023,23 @@ function getReviewOutcome(
   }
 
   return systemGrade === "incorrect" ? "incorrect" : "unsure";
+}
+
+function getSchedulerRatingForAnswer(
+  word: SessionWordWithWord,
+  questionType: QuestionType,
+  outcome: "correct" | "incorrect" | "unsure",
+) {
+  if (word.scheduler_rating_applied) {
+    return null;
+  }
+
+  if (outcome !== "correct") {
+    return getSchedulerRating(outcome);
+  }
+
+  const nextWord = { ...word, ...getSatisfiedUpdate(questionType) };
+  return isRecallReady(nextWord) ? getSchedulerRating("correct") : null;
 }
 
 function getAttemptConfidence(
@@ -1391,7 +1523,16 @@ async function getSessionWords(
           word,
           fast_meaning,
           example_sentence,
-          sort_order
+          sort_order,
+          roots,
+          prefixes,
+          suffixes,
+          etymology,
+          confusable_words,
+          image_path,
+          image_alt,
+          image_attribution,
+          image_source_url
         )
       `,
     )
@@ -1447,7 +1588,16 @@ async function getSessionWordById(
           word,
           fast_meaning,
           example_sentence,
-          sort_order
+          sort_order,
+          roots,
+          prefixes,
+          suffixes,
+          etymology,
+          confusable_words,
+          image_path,
+          image_alt,
+          image_attribution,
+          image_source_url
         )
       `,
     )
@@ -1667,7 +1817,10 @@ export function buildDailyWordSelection({
   const selectedReviewWordIds = new Set<number>();
   const reviewWords = masteryRows
     .filter(
-      (row) => isReviewableMasteryRow(row) && wordsById.has(row.vocab_word_id),
+      (row) =>
+        isReviewableMasteryRow(row) &&
+        isDueForReview(row as MasteryRow, studyDate) &&
+        wordsById.has(row.vocab_word_id),
     )
     .sort((first, second) =>
       compareDailyReviewRows(first, second, studyDate, wordOrderRankById),
@@ -1838,7 +1991,8 @@ function getInitialForeverReviewWordState(entry: SelectedSessionWord) {
 }
 
 function isDueForReview(row: MasteryRow, studyDate: string) {
-  return Boolean(row.next_review_on && row.next_review_on <= studyDate);
+  const dueDate = row.fsrs_due?.slice(0, 10) ?? row.next_review_on;
+  return Boolean(dueDate && dueDate <= studyDate);
 }
 
 function interleaveDailyChunks(
@@ -2080,11 +2234,17 @@ async function markWordMissed(
     .eq("user_id", userId);
 
   assertNoError(error, "Unable to update the missed word");
-  await updateMasteryAfterAttempt(supabase, userId, word.vocab_word_id, {
+  const update = await updateMasteryAfterAttempt(supabase, userId, word.vocab_word_id, {
     guessed: false,
     isCorrect: false,
     isRecallReady: false,
+    schedulerRating: word.scheduler_rating_applied
+      ? undefined
+      : getSchedulerRating("incorrect"),
   });
+  if (update.schedulerApplied) {
+    await markSessionWordSchedulerApplied(supabase, userId, word.id);
+  }
 }
 
 async function markWordGuessed(
@@ -2106,11 +2266,17 @@ async function markWordGuessed(
     .eq("user_id", userId);
 
   assertNoError(error, "Unable to update the guessed word");
-  await updateMasteryAfterAttempt(supabase, userId, word.vocab_word_id, {
+  const update = await updateMasteryAfterAttempt(supabase, userId, word.vocab_word_id, {
     guessed: true,
     isCorrect: true,
     isRecallReady: false,
+    schedulerRating: word.scheduler_rating_applied
+      ? undefined
+      : getSchedulerRating("unsure"),
   });
+  if (update.schedulerApplied) {
+    await markSessionWordSchedulerApplied(supabase, userId, word.id);
+  }
 }
 
 async function touchSessionWordAttempt(
@@ -2158,11 +2324,32 @@ async function creditKnownAnswer(
     .eq("user_id", userId);
 
   assertNoError(error, "Unable to credit the known answer");
-  await updateMasteryAfterAttempt(supabase, userId, word.vocab_word_id, {
+  const update = await updateMasteryAfterAttempt(supabase, userId, word.vocab_word_id, {
     guessed: false,
     isCorrect: true,
     isRecallReady: nextStatus === "recall_ready",
+    schedulerRating:
+      nextStatus === "recall_ready" && !word.scheduler_rating_applied
+        ? getSchedulerRating("correct")
+        : undefined,
   });
+  if (update.schedulerApplied) {
+    await markSessionWordSchedulerApplied(supabase, userId, word.id);
+  }
+}
+
+async function markSessionWordSchedulerApplied(
+  supabase: SupabaseClient,
+  userId: string,
+  sessionWordId: string,
+) {
+  const { error } = await supabase
+    .from("study_session_words")
+    .update({ scheduler_rating_applied: true })
+    .eq("id", sessionWordId)
+    .eq("user_id", userId);
+
+  assertNoError(error, "Unable to mark the review as scheduled");
 }
 
 function getSatisfiedUpdate(questionType: QuestionType) {
@@ -2205,13 +2392,14 @@ async function updateMasteryAfterAttempt(
     isCorrect: boolean;
     guessed: boolean;
     isRecallReady: boolean;
+    schedulerRating?: 1 | 2 | 3 | 4;
   },
 ) {
   const now = new Date().toISOString();
   const { data, error } = await supabase
     .from("user_word_mastery")
     .select(
-      "user_id, vocab_word_id, status, correct_count, miss_count, guessed_count, last_seen_at, last_ready_at, next_review_on, review_interval_days",
+      "user_id, vocab_word_id, status, correct_count, miss_count, guessed_count, last_seen_at, last_ready_at, next_review_on, review_interval_days, fsrs_due, fsrs_stability, fsrs_difficulty, fsrs_elapsed_days, fsrs_scheduled_days, fsrs_reps, fsrs_lapses, fsrs_state, fsrs_last_review",
     )
     .eq("user_id", userId)
     .eq("vocab_word_id", vocabWordId)
@@ -2222,7 +2410,7 @@ async function updateMasteryAfterAttempt(
   const existing = data as MasteryRow | null;
 
   if (existing?.status === "known") {
-    return;
+    return { schedulerApplied: false };
   }
 
   const nextStatus: UserWordStatus = result.isRecallReady
@@ -2236,6 +2424,9 @@ async function updateMasteryAfterAttempt(
       ? REVIEW_INTERVAL_DAYS[0]
       : nextIntervalDays;
   const nextReviewOn = addDaysToStudyDate(getStudyDate(), daysUntilReview);
+  const fsrsUpdate = result.schedulerRating
+    ? scheduleFsrsReview(existing, result.schedulerRating, new Date(now))
+    : null;
 
   const { error: upsertError } = await supabase
     .from("user_word_mastery")
@@ -2248,8 +2439,10 @@ async function updateMasteryAfterAttempt(
         last_ready_at: result.isRecallReady ? now : existing?.last_ready_at ?? null,
         last_seen_at: now,
         miss_count: (existing?.miss_count ?? 0) + (result.isCorrect ? 0 : 1),
-        next_review_on: nextReviewOn,
-        review_interval_days: nextIntervalDays,
+        next_review_on: fsrsUpdate?.next_review_on ?? nextReviewOn,
+        review_interval_days:
+          fsrsUpdate?.review_interval_days ?? nextIntervalDays,
+        ...(fsrsUpdate ?? {}),
         status: nextStatus,
         user_id: userId,
         vocab_word_id: vocabWordId,
@@ -2258,6 +2451,7 @@ async function updateMasteryAfterAttempt(
     );
 
   assertNoError(upsertError, "Unable to update word mastery");
+  return { schedulerApplied: Boolean(fsrsUpdate) };
 }
 
 async function markWordAlreadyKnown(
@@ -2330,6 +2524,10 @@ function getNextReviewIntervalDays(
 
   if (!result.isRecallReady) {
     return existing?.review_interval_days ?? 0;
+  }
+
+  if (existing?.next_review_on && existing.next_review_on > getStudyDate()) {
+    return existing.review_interval_days;
   }
 
   const currentInterval = existing?.review_interval_days ?? 0;

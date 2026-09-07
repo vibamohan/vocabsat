@@ -8,7 +8,10 @@ VocabSAT is a focused SAT vocabulary trainer built around daily recall, fast fee
 - Mixes recognition, reverse recall, typed recall, definition recall, and SAT-style usage questions.
 - Shows corrections immediately after wrong answers.
 - Asks users to mark whether correct SAT-style answers were known or guessed.
-- Tracks word mastery across sessions and supports long-term review.
+- Tracks word mastery across sessions with 90%-retention FSRS review scheduling.
+- Tracks active response time and offers optional timed practice.
+- Supports pronunciation, curated word origins, confusables, visual mnemonics, and private notes.
+- Includes passage completion, sentence writing, and private learning analytics.
 - Persists progress with Supabase Auth, Postgres, RLS, and typed client-side session logic.
 
 ## Why It Matters
@@ -23,6 +26,7 @@ This project is designed as a practical learning product, not a flashcard demo. 
 - shadcn/ui
 - Tailwind CSS
 - Vitest and Testing Library
+- ts-fsrs
 
 ## Key Routes
 
@@ -30,10 +34,31 @@ This project is designed as a practical learning product, not a flashcard demo. 
 - `/session`: daily learn, practice, correction, guess check, and completion flow
 - `/review`: ongoing review for previously seen words
 - `/words`: vocabulary progress view
+- `/passages`: curated passage-completion practice
+- `/write`: sentence-writing practice with example comparison
+- `/progress`: private accuracy, retention, and response-speed analytics
 
 ## Local Setup
 
-Create `.env.local` with your Supabase public project values:
+Use Node.js 22.12 or newer. If you use `nvm`, the repository's `.nvmrc` selects a compatible version.
+
+For guided setup and startup, run:
+
+```bash
+npm run local
+```
+
+On first run, the script asks for your Supabase project URL and publishable key, creates `.env.local`, and installs dependencies if needed.
+
+Alternatively, set up the repository manually:
+
+```bash
+nvm use
+npm ci
+cp .env.example .env.local
+```
+
+Then update `.env.local` with your Supabase public project values:
 
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
@@ -53,11 +78,12 @@ Apply the Supabase SQL files in order:
 2. Run `supabase/seed.sql`.
 3. Add your local app URL to Supabase Auth settings.
 
+The learning-expansion migration also creates a public-read `vocab-images` Storage bucket. Upload only reviewed, licensed images and store their object paths on `vocab_words`.
+
 ## Development
 
 ```bash
-npm run lint
-npm run test
+npm run check
 ```
 
-The app requires `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` before running locally.
+The check command runs linting, TypeScript validation, and the unit test suite. The app requires `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` before running locally.

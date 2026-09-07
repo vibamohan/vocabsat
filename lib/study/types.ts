@@ -37,6 +37,15 @@ export type VocabWord = {
   fast_meaning: string;
   example_sentence: string;
   sort_order: number;
+  roots?: string[];
+  prefixes?: string[];
+  suffixes?: string[];
+  etymology?: string | null;
+  confusable_words?: string[];
+  image_path?: string | null;
+  image_alt?: string | null;
+  image_attribution?: string | null;
+  image_source_url?: string | null;
 };
 
 export type StudySession = {
@@ -74,6 +83,7 @@ export type SessionWord = {
   guessed_count: number;
   last_question_type: QuestionType | null;
   last_attempted_at: string | null;
+  scheduler_rating_applied: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -121,6 +131,13 @@ export type PendingAnswerReview = {
   systemGrade: AnswerReviewGrade;
   targetWord: SessionWordWithWord;
   typedAnswer?: string;
+  timing?: {
+    answeredAt: string;
+    responseTimeMs: number;
+    shownAt: string;
+    timedMode?: boolean;
+    timedOut?: boolean;
+  };
 };
 
 export type TodaySessionSummary =

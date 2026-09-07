@@ -15,6 +15,10 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import { SpeechButton } from "@/components/study/speech-button";
+import { WordEnrichment } from "@/components/study/word-enrichment";
+import { WordNoteEditor } from "@/components/study/word-note-editor";
+import { QuestionCountdown } from "@/components/study/question-countdown";
 import { getPrimaryExampleSentence } from "@/lib/study/example-sentences";
 import { getQuestionTypeLabel } from "@/lib/study/questions";
 import { getStudyProgress, type StudyProgress } from "@/lib/study/progress";
@@ -52,11 +56,13 @@ export function LearnScreen({
   isPending,
   onContinue,
   onReplaceKnown,
+  userId,
   view,
 }: {
   isPending?: boolean;
   onContinue: () => void;
   onReplaceKnown: () => void;
+  userId?: string;
   view: LearnView;
 }) {
   return (
@@ -67,9 +73,15 @@ export function LearnScreen({
             Learn {view.currentIndex + 1} of {view.totalWords}
           </Badge>
         </div>
-        <CardTitle className="text-4xl leading-tight">
-          {capitalize(view.currentWord.vocab_word.word)}
-        </CardTitle>
+        <div className="flex items-center gap-2">
+          <CardTitle className="text-4xl leading-tight">
+            {capitalize(view.currentWord.vocab_word.word)}
+          </CardTitle>
+          <SpeechButton
+            label={`Pronounce ${view.currentWord.vocab_word.word}`}
+            text={view.currentWord.vocab_word.word}
+          />
+        </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
         <div className="flex flex-col gap-2">
@@ -80,6 +92,11 @@ export function LearnScreen({
             {view.currentWord.vocab_word.fast_meaning}
           </p>
         </div>
+        <WordEnrichment word={view.currentWord.vocab_word} />
+        <WordNoteEditor
+          userId={userId}
+          vocabWordId={view.currentWord.vocab_word_id}
+        />
         <Separator />
         <div className="flex flex-col gap-2">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -117,12 +134,20 @@ export function QuestionScreen({
   isPending,
   onAnswer,
   onTypedAnswer,
+  onTimeout,
+  onToggleTimedMode,
+  timedMode = false,
+  timerSeconds = 30,
   variant = "daily",
   view,
 }: {
   isPending?: boolean;
   onAnswer: (question: StudyQuestion, selectedVocabWordId: number) => void;
   onTypedAnswer?: (question: StudyQuestion, typedAnswer: string) => void;
+  onTimeout?: (question: StudyQuestion) => void;
+  onToggleTimedMode?: () => void;
+  timedMode?: boolean;
+  timerSeconds?: number;
   variant?: "daily" | "review";
   view: QuestionScreenView;
 }) {
@@ -174,12 +199,31 @@ export function QuestionScreen({
     >
       <Card className="w-full">
         <CardHeader className="gap-3 p-5 sm:p-7">
-          <CardDescription className="font-medium">
-            {getQuestionTypeLabel(view.question.questionType)}
-          </CardDescription>
-          <CardTitle className="text-2xl leading-snug sm:text-3xl">
-            {view.question.prompt}
-          </CardTitle>
+          <div className="flex items-center justify-between gap-3">
+            <CardDescription className="font-medium">
+              {getQuestionTypeLabel(view.question.questionType)}
+            </CardDescription>
+            <div className="flex items-center gap-2">
+              {timedMode && onTimeout ? (
+                <QuestionCountdown
+                  key={`${view.session.total_questions_answered}:${view.question.targetSessionWordId}`}
+                  onTimeout={() => onTimeout(view.question)}
+                  seconds={timerSeconds}
+                />
+              ) : null}
+              {onToggleTimedMode ? (
+                <Button onClick={onToggleTimedMode} size="sm" type="button" variant="ghost">
+                  {timedMode ? "Untimed" : "Timed"}
+                </Button>
+              ) : null}
+            </div>
+          </div>
+          <div className="flex items-start gap-2">
+            <CardTitle className="text-2xl leading-snug sm:text-3xl">
+              {view.question.prompt}
+            </CardTitle>
+            <SpeechButton label="Read question aloud" text={view.question.prompt} />
+          </div>
         </CardHeader>
         <CardContent>
           {view.question.answerMode === "typed" ? (

@@ -13,6 +13,7 @@ import {
 } from "@/components/study/session-screens";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import { useQuestionTimer } from "@/hooks/use-question-timer";
 import {
   advanceLearn,
   getCurrentUser,
@@ -20,6 +21,7 @@ import {
   replaceKnownLearnWord,
   resetTodaySession,
   submitAnswer,
+  submitTimedOutAnswer,
 } from "@/lib/study/client-session";
 import {
   applyOptimisticAnswerReview,
@@ -55,10 +57,22 @@ export function SessionClient() {
     null,
   );
   const [view, setView] = useState<SessionView | null>(null);
+  const [timedMode, setTimedMode] = useState(false);
+  const [timerSeconds, setTimerSeconds] = useState(30);
   const handledQuestionKeyRef = useRef<string | null>(null);
   const handledReviewAttemptIdsRef = useRef<Set<string>>(new Set());
   const persistenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const persistenceVersionRef = useRef(0);
+  const activeQuestionKey =
+    view?.screen === "question"
+      ? [
+          view.session.id,
+          view.session.total_questions_answered,
+          view.question.targetSessionWordId,
+          view.question.questionType,
+        ].join(":")
+      : null;
+  const finishQuestionTiming = useQuestionTimer(activeQuestionKey);
 
   const refreshView = useCallback(async () => {
     if (!user) {
@@ -118,6 +132,13 @@ export function SessionClient() {
       }
 
       setUser(currentUser);
+      const { data: preferences } = await supabase
+        .from("user_study_preferences")
+        .select("timed_mode, timer_seconds")
+        .eq("user_id", currentUser.id)
+        .maybeSingle();
+      setTimedMode(preferences?.timed_mode ?? false);
+      setTimerSeconds(preferences?.timer_seconds ?? 30);
       setMode({ type: "normal" });
       setView(await getSessionView(supabase, currentUser.id));
     } catch (caughtError) {
@@ -238,6 +259,8 @@ export function SessionClient() {
         attemptId,
       );
 
+      review.timing = finishQuestionTiming();
+
       setMode({ type: "answer_review", review, sourceView: view });
     } catch (caughtError) {
       setError(
@@ -282,6 +305,8 @@ export function SessionClient() {
         typedAnswer,
         attemptId,
       );
+
+      review.timing = finishQuestionTiming();
 
       setMode({ type: "answer_review", review, sourceView: view });
     } catch (caughtError) {
@@ -342,6 +367,7 @@ export function SessionClient() {
             reviewGrade: grade,
             selectedVocabWordId,
             sessionWordId: mode.review.question.targetSessionWordId,
+            timing: mode.review.timing,
           });
           return;
         }
@@ -352,10 +378,56 @@ export function SessionClient() {
           reviewGrade: grade,
           sessionWordId: mode.review.question.targetSessionWordId,
           typedAnswer: mode.review.typedAnswer ?? "",
+          timing: mode.review.timing,
         });
       },
       "Unable to save the answer.",
     );
+  };
+
+  const handleToggleTimedMode = async () => {
+    if (!user) return;
+    const nextTimedMode = !timedMode;
+    setTimedMode(nextTimedMode);
+    const { error: preferenceError } = await supabase
+      .from("user_study_preferences")
+      .upsert({ timed_mode: nextTimedMode, user_id: user.id });
+    if (preferenceError) {
+      setTimedMode(!nextTimedMode);
+      setError("Unable to save timed mode.");
+    }
+  };
+
+  const handleTimeout = async (question: StudyQuestion) => {
+    if (!user || !view || view.screen !== "question") return;
+    const questionKey = [
+      view.session.id,
+      view.session.total_questions_answered,
+      question.targetSessionWordId,
+      question.questionType,
+    ].join(":");
+    if (handledQuestionKeyRef.current === questionKey) return;
+    handledQuestionKeyRef.current = questionKey;
+    const timing = finishQuestionTiming();
+    if (!timing) return;
+
+    setIsPending(true);
+    setError(null);
+    try {
+      await submitTimedOutAnswer(supabase, user.id, {
+        attemptId: crypto.randomUUID(),
+        questionType: question.questionType,
+        sessionWordId: question.targetSessionWordId,
+        timing: { ...timing, timedMode: true, timedOut: true },
+      });
+      handledQuestionKeyRef.current = null;
+      await refreshView();
+    } catch (caughtError) {
+      setError(getErrorMessage(caughtError, "Unable to save the timeout."));
+      handledQuestionKeyRef.current = null;
+    } finally {
+      setIsPending(false);
+    }
   };
 
   const handleReset = async () => {
@@ -426,6 +498,7 @@ export function SessionClient() {
               isPending={isPending}
               onContinue={handleLearnContinue}
               onReplaceKnown={handleReplaceKnownWord}
+              userId={user?.id}
               view={view}
             />
           ) : null}
@@ -434,6 +507,10 @@ export function SessionClient() {
               isPending={isPending}
               onAnswer={handleAnswer}
               onTypedAnswer={handleTypedAnswer}
+              onTimeout={handleTimeout}
+              onToggleTimedMode={() => void handleToggleTimedMode()}
+              timedMode={timedMode}
+              timerSeconds={timerSeconds}
               view={view}
             />
           ) : null}

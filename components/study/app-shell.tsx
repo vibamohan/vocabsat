@@ -22,6 +22,12 @@ export function StudyAppShell({ actions, children }: StudyAppShellProps) {
             </Link>
           </div>
           <div className="flex min-w-0 items-center gap-3">
+            <nav className="hidden items-center gap-3 text-sm text-muted-foreground sm:flex">
+              <Link href="/words">Words</Link>
+              <Link href="/write">Write</Link>
+              <Link href="/passages">Passages</Link>
+              <Link href="/progress">Progress</Link>
+            </nav>
             {actions}
             <LogoutButton aria-label="Sign out" size="icon">
               {null}

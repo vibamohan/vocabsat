@@ -11,6 +11,7 @@ export function vocabWord(overrides: Partial<VocabWord> = {}): VocabWord {
   const word = overrides.word ?? `word-${id}`;
 
   return {
+    ...overrides,
     example_sentence:
       overrides.example_sentence ?? `The student used ${word} in a sentence.`,
     fast_meaning: overrides.fast_meaning ?? `meaning-${id}`,
@@ -63,6 +64,7 @@ export function sessionWord(
     last_question_type: null,
     miss_count: 0,
     position: 0,
+    scheduler_rating_applied: false,
     satisfied_meaning_recognition: false,
     satisfied_reverse_recall: false,
     satisfied_sat_usage: false,

@@ -1,12 +1,18 @@
 {
   "private": true,
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
+    "local": "bash scripts/run-local.sh",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run lint && npm run typecheck && npm run test",
     "seed:build": "node scripts/build-vocab-seed.mjs"
   },
   "dependencies": {
@@ -28,7 +34,8 @@
     "random": "^5.4.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "tailwind-merge": "^3.4.0"
+    "tailwind-merge": "^3.4.0",
+    "ts-fsrs": "^5.4.1"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
