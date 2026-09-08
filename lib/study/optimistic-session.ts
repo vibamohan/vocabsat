@@ -27,6 +27,7 @@ import type {
 type QuestionView = Extract<SessionView, { screen: "question" }>;
 
 export type OptimisticAnswerResult = {
+  
   nextView: SessionView;
   correction?: CorrectionFeedback;
   pendingGuess?: PendingGuess;
